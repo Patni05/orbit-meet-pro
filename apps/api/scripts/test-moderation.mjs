@@ -13,6 +13,13 @@
 import { io } from 'socket.io-client';
 
 const API = process.argv[2] ?? process.env.API_URL ?? 'http://127.0.0.1:4000';
+
+/**
+ * Socket.IO treats a URL path as its namespace, so the realtime connection
+ * needs the bare origin even when REST lives under a prefix like /api behind
+ * a reverse proxy. Same split the browser client makes.
+ */
+const RT_BASE = process.env.RT_URL ?? new URL(API).origin;
 const RT_NAMESPACE = '/rt';
 
 let passed = 0;
@@ -63,7 +70,7 @@ async function register(name) {
 /** Opens a realtime socket and waits until the room state has arrived. */
 function connect(sessionToken) {
   return new Promise((resolve, reject) => {
-    const socket = io(`${API}${RT_NAMESPACE}`, {
+    const socket = io(`${RT_BASE}${RT_NAMESPACE}`, {
       path: '/realtime',
       transports: ['websocket'],
       auth: { sessionToken },
