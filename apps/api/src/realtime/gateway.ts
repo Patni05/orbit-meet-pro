@@ -19,6 +19,9 @@ import {
   quizAnswerSchema,
   quizCreateSchema,
   quizExtendSchema,
+  whiteboardModeSchema,
+  whiteboardPermissionSchema,
+  whiteboardStrokeSchema,
   spotlightSchema,
   type Ack,
   type ClientEvents,
@@ -62,6 +65,15 @@ import {
   startQuiz,
   submitAnswer,
 } from '../modules/meetings/quiz.service';
+import {
+  addStroke,
+  canDraw,
+  clearBoard,
+  loadBoard,
+  setMode,
+  setPermission,
+  undoLastStroke,
+} from '../modules/meetings/whiteboard.service';
 import {
   endMeeting,
   findById,
@@ -330,6 +342,31 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
   }, 15_000);
   quizSweep.unref();
 
+  /**
+   * Re-sends whiteboard rights after a mode or permission change.
+   *
+   * Each participant gets their own `canDraw`, because the same mode means
+   * different things depending on role and on any individual grant or denial.
+   */
+  async function broadcastWhiteboardPermissions(id: string): Promise<void> {
+    const meeting = await findById(id);
+    if (!meeting) return;
+
+    const participants = await prisma.meetingParticipant.findMany({
+      where: { meetingId: id, status: 'ADMITTED' },
+      select: { id: true, identity: true, role: true },
+    });
+
+    for (const person of participants) {
+      emitToParticipant(person.id, 'whiteboard:permissions', {
+        mode: meeting.whiteboardMode as never,
+        canDraw: canDraw(meeting, person),
+        allowed: meeting.whiteboardAllowed,
+        denied: meeting.whiteboardDenied,
+      });
+    }
+  }
+
   async function refreshWaitingList(meeting: MeetingWithHost): Promise<void> {
     const rows = await prisma.meetingParticipant.findMany({
       where: { meetingId: meeting.id, status: 'WAITING' },
@@ -452,7 +489,47 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
 
   // ---------------------------------------------------------------- connection
 
+  /**
+   * Makes sure every acknowledged event answers, even when the handler throws.
+   *
+   * Socket.IO acks are promises on the client. A handler that raises — a
+   * database constraint, a dropped connection mid-query — would otherwise
+   * simply never reply, and the caller would wait forever with no error and no
+   * timeout. A visible failure is always better than a silent hang, so the
+   * last argument is inspected and, if it is an ack, called with an error.
+   */
+  function guardAcks(socket: OrbitSocket): void {
+    socket.use(([event, ...args], next) => {
+      const ack = args[args.length - 1];
+      if (typeof ack !== 'function') return next();
+
+      let settled = false;
+      const once = (response: unknown) => {
+        if (settled) return;
+        settled = true;
+        (ack as (value: unknown) => void)(response);
+      };
+
+      args[args.length - 1] = once;
+
+      try {
+        next();
+      } catch (error) {
+        logger.error({ err: error, event }, 'realtime handler threw');
+        once({ ok: false, code: ERROR_CODES.INTERNAL, message: 'Something went wrong. Please try again.' });
+      }
+    });
+
+    // Asynchronous handlers reject after `next()` has already returned, so the
+    // error surfaces here rather than in the try above.
+    socket.on('error', (error) => {
+      logger.error({ err: error }, 'realtime socket error');
+    });
+  }
+
   nsp.on('connection', (socket: OrbitSocket) => {
+    guardAcks(socket);
+
     void (async () => {
       const ctx = await loadContext(socket);
       if (!ctx) {
@@ -1601,6 +1678,108 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
             data: { awayCount: { increment: 1 } },
           })
           .catch(() => undefined);
+        ackOk(ack, undefined as never);
+      });
+
+      // ------------------------------------------------------- whiteboard
+
+      socket.on('whiteboard:load', async (_payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+        ackOk(ack, await loadBoard(ctx.meeting, ctx.participant));
+      });
+
+      socket.on('whiteboard:draw', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        // Permission is re-read from the database for every stroke. A client
+        // that keeps drawing after being revoked is simply refused.
+        if (!canDraw(ctx.meeting, ctx.participant)) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'You cannot draw on this board.');
+        }
+
+        const parsed = whiteboardStrokeSchema.safeParse(payload);
+        if (!parsed.success) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, parsed.error.issues[0]?.message ?? 'Invalid stroke.');
+        }
+
+        // Drawing is chatty by nature, so the limit is generous but real: it
+        // exists to stop a script pushing thousands of strokes a second into
+        // everyone else's canvas.
+        const rate = await bumpCounter('wb-draw', ctx.participant.id, 10);
+        if (rate > 400) return ackErr(ack, ERROR_CODES.RATE_LIMITED, 'Slow down a moment.');
+
+        try {
+          const stroke = await addStroke({
+            meetingId,
+            authorIdentity: ctx.participant.identity,
+            authorName: ctx.participant.displayName,
+            tool: parsed.data.tool,
+            color: parsed.data.color,
+            width: parsed.data.width,
+            points: parsed.data.points,
+            // Text is rendered onto a canvas as a text node, never as markup.
+            text: parsed.data.text ? sanitizeText(parsed.data.text) : null,
+          });
+
+          // Sent to everyone else; the author already drew it locally, and
+          // echoing it back would make their own line appear twice.
+          socket.to(meetingRoom(meetingId)).emit('whiteboard:stroke', stroke);
+          ackOk(ack, stroke);
+        } catch (error) {
+          // A write can still fail under contention or a dropped connection.
+          // The client is waiting on this ack, so it must always get one.
+          logger.error({ err: error, meetingId }, 'whiteboard stroke failed');
+          ackErr(ack, ERROR_CODES.INTERNAL, 'That stroke could not be saved.');
+        }
+      });
+
+      socket.on('whiteboard:undo', async (_payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        // Undo removes your own last stroke, not the board's — undoing
+        // somebody else's work by pressing Ctrl+Z would be surprising.
+        const strokeId = await undoLastStroke(meetingId, ctx.participant.identity);
+        if (!strokeId) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'Nothing of yours to undo.');
+
+        nsp.to(meetingRoom(meetingId)).emit('whiteboard:undo', { strokeId });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:whiteboard-clear', async (_payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can clear the board.');
+
+        await clearBoard(meetingId);
+        nsp.to(meetingRoom(meetingId)).emit('whiteboard:cleared', {
+          by: host.participant.displayName,
+        });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:whiteboard-mode', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = whiteboardModeSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid mode.');
+
+        await setMode(meetingId, parsed.data.mode);
+        await broadcastWhiteboardPermissions(meetingId);
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:whiteboard-permission', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = whiteboardPermissionSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        await setPermission(meetingId, parsed.data.identity, parsed.data.canDraw);
+        await broadcastWhiteboardPermissions(meetingId);
         ackOk(ack, undefined as never);
       });
 

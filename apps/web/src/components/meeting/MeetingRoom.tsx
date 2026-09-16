@@ -29,6 +29,7 @@ const PeoplePanel = lazy(() => import('./PeoplePanel').then((m) => ({ default: m
 const InfoPanel = lazy(() => import('./InfoPanel').then((m) => ({ default: m.InfoPanel })));
 const PollsPanel = lazy(() => import('./PollsPanel').then((m) => ({ default: m.PollsPanel })));
 const QuizPanel = lazy(() => import('./QuizPanel').then((m) => ({ default: m.QuizPanel })));
+const WhiteboardPanel = lazy(() => import('./WhiteboardPanel').then((m) => ({ default: m.WhiteboardPanel })));
 const BlocklistPanel = lazy(() => import('./BlocklistPanel').then((m) => ({ default: m.BlocklistPanel })));
 const DiagnosticsPanel = lazy(() =>
   import('./DiagnosticsPanel').then((m) => ({ default: m.DiagnosticsPanel })),
@@ -195,6 +196,12 @@ export function MeetingRoom({
       { id: 'quiz', label: 'Open quiz', keywords: 'exam test', run: () => setPanel('quiz') },
       { id: 'polls', label: 'Open polls', keywords: 'vote', run: () => setPanel('polls') },
       {
+        id: 'whiteboard',
+        label: 'Open whiteboard',
+        keywords: 'draw board sketch',
+        run: () => setPanel('whiteboard'),
+      },
+      {
         id: 'share',
         label: screenSharing ? 'Stop presenting' : 'Start screen share',
         hint: 'S',
@@ -295,7 +302,9 @@ export function MeetingRoom({
                 ? 'Blocked participants'
                 : panel === 'quiz'
                   ? 'Quiz'
-                  : '';
+                  : panel === 'whiteboard'
+                    ? 'Whiteboard'
+                    : '';
 
   return (
     <div className="meeting-surface flex h-dvh flex-col overflow-hidden">
@@ -439,6 +448,7 @@ export function MeetingRoom({
                   {panel === 'polls' && <PollsPanel />}
                   {panel === 'blocklist' && <BlocklistPanel />}
                   {panel === 'quiz' && <QuizPanel />}
+                  {panel === 'whiteboard' && <WhiteboardPanel />}
                 </Suspense>
               </ErrorBoundary>
             </div>

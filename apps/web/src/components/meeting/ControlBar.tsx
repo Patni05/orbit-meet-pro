@@ -5,6 +5,7 @@ import {
   BarChart3,
   Focus,
   GraduationCap,
+  PenTool,
   PictureInPicture2,
   Circle,
   Megaphone,
@@ -112,6 +113,7 @@ export function ControlBar(props: ControlBarProps) {
           onOpenReactions={() => setReactionsOpen(true)}
           onOpenPolls={() => setPanel('polls')}
           onOpenQuiz={() => setPanel('quiz')}
+          onOpenWhiteboard={() => setPanel('whiteboard')}
           onOpenAnnounce={props.onOpenAnnounce}
           onOpenBlocklist={() => setPanel('blocklist')}
           onToggleFocus={props.onToggleFocus}
@@ -373,6 +375,7 @@ function MoreMenu({
   onOpenReactions,
   onOpenPolls,
   onOpenQuiz,
+  onOpenWhiteboard,
   onOpenAnnounce,
   onOpenBlocklist,
   onToggleFocus,
@@ -397,6 +400,7 @@ function MoreMenu({
   onOpenReactions: () => void;
   onOpenPolls: () => void;
   onOpenQuiz: () => void;
+  onOpenWhiteboard: () => void;
   onOpenAnnounce: () => void;
   onOpenBlocklist: () => void;
   onToggleFocus: () => void;

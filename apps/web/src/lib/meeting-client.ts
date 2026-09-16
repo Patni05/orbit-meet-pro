@@ -27,6 +27,9 @@ import {
   type BlocklistEntry,
   type PollPayload,
   type ReactionKey,
+  type WhiteboardMode,
+  type WhiteboardState,
+  type WhiteboardStrokePayload,
   type RoomParticipant,
   type ServerEvents,
 } from '@orbit/shared';
@@ -736,6 +739,66 @@ class MeetingClient {
   submitQuiz = (quizId: string) => this.request('quiz:submit', { quizId });
   fetchQuizResults = (quizId: string) => this.request<unknown>('quiz:results', { quizId });
   reportQuizAway = (quizId: string) => this.request('quiz:away', { quizId });
+
+  // ------------------------------------------------------------- whiteboard
+
+  loadWhiteboard = async (): Promise<WhiteboardState | null> => {
+    const result = await this.request<WhiteboardState>('whiteboard:load', {});
+    return result.ok ? (result.data ?? null) : null;
+  };
+
+  drawStroke = (stroke: {
+    tool: string;
+    color: string;
+    width: number;
+    points: number[];
+    text?: string | null;
+  }) => this.request<WhiteboardStrokePayload>('whiteboard:draw', stroke);
+
+  undoWhiteboard = () => this.request('whiteboard:undo', {});
+  clearWhiteboard = () => this.hostAction('host:whiteboard-clear', {});
+  setWhiteboardMode = (mode: WhiteboardMode) => this.hostAction('host:whiteboard-mode', { mode });
+  setWhiteboardPermission = (identity: string, canDraw: boolean) =>
+    this.hostAction('host:whiteboard-permission', { identity, canDraw });
+
+  /**
+   * Subscribes to board updates.
+   *
+   * Strokes are deliberately not mirrored into the room store: a board can
+   * accumulate thousands of them, and holding that in global state would make
+   * every unrelated re-render walk the whole list. The panel owns them, and
+   * this returns an unsubscribe so nothing is left behind when it closes.
+   */
+  onWhiteboard(handlers: {
+    stroke?: (stroke: WhiteboardStrokePayload) => void;
+    undo?: (payload: { strokeId: string }) => void;
+    cleared?: (payload: { by: string }) => void;
+    permissions?: (payload: {
+      mode: WhiteboardMode;
+      canDraw: boolean;
+      allowed: string[];
+      denied: string[];
+    }) => void;
+  }): () => void {
+    const socket = this.socket;
+    if (!socket) return () => undefined;
+
+    const bound: [string, (payload: never) => void][] = [];
+    const bind = <T>(event: string, handler: ((payload: T) => void) | undefined) => {
+      if (!handler) return;
+      socket.on(event as never, handler as never);
+      bound.push([event, handler as (payload: never) => void]);
+    };
+
+    bind('whiteboard:stroke', handlers.stroke);
+    bind('whiteboard:undo', handlers.undo);
+    bind('whiteboard:cleared', handlers.cleared);
+    bind('whiteboard:permissions', handlers.permissions);
+
+    return () => {
+      for (const [event, handler] of bound) socket.off(event as never, handler as never);
+    };
+  }
 
   /** Voting is open to everyone, so it is not a host action. */
   vote = (pollId: string, optionIds: string[]) =>

@@ -9,6 +9,9 @@ import type {
   QuizProgress,
   QuizResults,
   QuizSummary,
+  WhiteboardMode,
+  WhiteboardState,
+  WhiteboardStrokePayload,
   ReactionEvent,
   RoomParticipant,
   RoomState,
@@ -98,6 +101,17 @@ export interface ServerEvents {
   'quiz:results': (results: QuizResults) => void;
   /** Host-only live progress while a quiz runs. */
   'quiz:progress': (progress: QuizProgress) => void;
+
+  'whiteboard:stroke': (stroke: WhiteboardStrokePayload) => void;
+  'whiteboard:undo': (payload: { strokeId: string }) => void;
+  'whiteboard:cleared': (payload: { by: string }) => void;
+  /** Permission or mode changed; carries this viewer's own recomputed rights. */
+  'whiteboard:permissions': (payload: {
+    mode: WhiteboardMode;
+    canDraw: boolean;
+    allowed: string[];
+    denied: string[];
+  }) => void;
 }
 
 /** Acks report authorization failures instead of silently dropping the action. */
@@ -169,6 +183,13 @@ export interface ClientEvents {
   'quiz:results': (payload: { quizId: string }, ack?: Ack<QuizResults>) => void;
   /** Informational only: how often the tab lost focus during the quiz. */
   'quiz:away': (payload: { quizId: string }, ack?: Ack) => void;
+
+  'whiteboard:load': (payload: Record<string, never>, ack?: Ack<WhiteboardState>) => void;
+  'whiteboard:draw': (payload: unknown, ack?: Ack<WhiteboardStrokePayload>) => void;
+  'whiteboard:undo': (payload: Record<string, never>, ack?: Ack) => void;
+  'host:whiteboard-clear': (payload: Record<string, never>, ack?: Ack) => void;
+  'host:whiteboard-mode': (payload: { mode: WhiteboardMode }, ack?: Ack) => void;
+  'host:whiteboard-permission': (payload: { identity: string; canDraw: boolean }, ack?: Ack) => void;
 
   'ping:rt': (payload: Record<string, never>, ack?: Ack<{ serverTime: string }>) => void;
 }

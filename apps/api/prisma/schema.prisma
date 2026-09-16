@@ -148,6 +148,14 @@ model Meeting {
   /// personal pin, which is a viewer-only preference and never stored.
   spotlightIdentities String[] @default([])
 
+  /// Who may draw on the whiteboard.
+  whiteboardMode WhiteboardMode @default(EVERYONE)
+  /// Identities explicitly allowed when the mode is SELECTED, or explicitly
+  /// denied otherwise. A host silencing one person should not have to change
+  /// the policy for everybody.
+  whiteboardAllowed String[] @default([])
+  whiteboardDenied  String[] @default([])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -161,6 +169,7 @@ model Meeting {
   announcements MeetingAnnouncement[]
   polls        Poll[]
   quizzes      Quiz[]
+  strokes      WhiteboardStroke[]
 
   @@index([hostId, status])
   @@index([scheduledAt])
@@ -577,4 +586,54 @@ model QuizAnswer {
   /// One answer row per question per attempt; re-answering updates in place.
   @@unique([quizParticipantId, questionId])
   @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Collaborative whiteboard
+// ---------------------------------------------------------------------------
+
+enum WhiteboardMode {
+  EVERYONE
+  HOSTS_ONLY
+  SELECTED
+}
+
+/**
+ * One drawing operation.
+ *
+ * Stored as a stroke — a tool, a colour and a list of points — rather than as
+ * an image. That is what lets the board synchronise by sending a few hundred
+ * bytes per stroke instead of a bitmap per frame, lets a late joiner rebuild
+ * the exact board by replaying rows, and makes undo a deletion rather than a
+ * diff of pixels.
+ */
+model WhiteboardStroke {
+  id        String @id @default(uuid())
+  meetingId String
+
+  /// Who drew it, so undo can be scoped to its author.
+  authorIdentity String
+  authorName     String
+
+  /// pen | eraser | line | rect | ellipse | text
+  tool  String
+  color String
+  width Int
+
+  /// Flattened [x1, y1, x2, y2, …] in normalised 0–1 board space, so the board
+  /// looks the same on a phone and a 4K monitor.
+  points Float[]
+  /// Only for the text tool.
+  text   String?
+
+  /// Monotonic per meeting; replaying in this order reproduces the board.
+  seq       Int
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  /// Two people drawing at the same instant must not land on the same seq.
+  /// The database refuses the duplicate and the service retries.
+  @@unique([meetingId, seq])
+  @@index([meetingId, seq])
 }

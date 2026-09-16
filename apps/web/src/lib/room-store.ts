@@ -42,7 +42,16 @@ export type ConnectionPhase =
   | 'error';
 
 export type LayoutMode = 'grid' | 'speaker';
-export type PanelId = 'chat' | 'people' | 'info' | 'diagnostics' | 'polls' | 'blocklist' | 'quiz' | null;
+export type PanelId =
+  | 'chat'
+  | 'people'
+  | 'info'
+  | 'diagnostics'
+  | 'polls'
+  | 'blocklist'
+  | 'quiz'
+  | 'whiteboard'
+  | null;
 
 export interface TrackBundle {
   camera?: Track;

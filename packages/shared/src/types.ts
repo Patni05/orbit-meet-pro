@@ -408,3 +408,38 @@ export interface QuizSummary {
   createdAt: string;
   endedAt: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Whiteboard
+// ---------------------------------------------------------------------------
+
+export type WhiteboardMode = 'EVERYONE' | 'HOSTS_ONLY' | 'SELECTED';
+export type WhiteboardTool = 'pen' | 'eraser' | 'line' | 'rect' | 'ellipse' | 'text';
+
+/**
+ * One drawing operation.
+ *
+ * Points are normalised to 0–1 in both axes, so a stroke drawn on a phone
+ * lands in the same place on a widescreen monitor instead of being clipped or
+ * squashed.
+ */
+export interface WhiteboardStrokePayload {
+  id: string;
+  authorIdentity: string;
+  authorName: string;
+  tool: WhiteboardTool;
+  color: string;
+  width: number;
+  points: number[];
+  text?: string | null;
+  seq: number;
+}
+
+export interface WhiteboardState {
+  mode: WhiteboardMode;
+  /** Whether *this* viewer may currently draw, decided by the server. */
+  canDraw: boolean;
+  allowed: string[];
+  denied: string[];
+  strokes: WhiteboardStrokePayload[];
+}

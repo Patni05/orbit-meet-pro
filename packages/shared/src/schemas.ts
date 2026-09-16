@@ -231,3 +231,32 @@ export const quizExtendSchema = z.object({
   quizId: z.string().uuid(),
   seconds: z.number().int().min(5).max(1800),
 });
+
+// ---------------------------------------------------------------------------
+// Whiteboard
+// ---------------------------------------------------------------------------
+
+/**
+ * A stroke, bounded on every axis that could be abused.
+ *
+ * The point cap is the important one: an unbounded polyline is an easy way to
+ * push megabytes through the socket and into every other client. 1000 points
+ * is far more than a human hand produces in one stroke.
+ */
+export const whiteboardStrokeSchema = z.object({
+  tool: z.enum(['pen', 'eraser', 'line', 'rect', 'ellipse', 'text']),
+  // A CSS hex colour only — never an arbitrary string that ends up in a style.
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid colour.'),
+  width: z.number().int().min(1).max(64),
+  points: z.array(z.number().min(-0.5).max(1.5)).min(2).max(1000),
+  text: z.string().trim().max(200).nullable().optional(),
+});
+
+export const whiteboardModeSchema = z.object({
+  mode: z.enum(['EVERYONE', 'HOSTS_ONLY', 'SELECTED']),
+});
+
+export const whiteboardPermissionSchema = z.object({
+  identity: z.string().trim().min(1).max(128),
+  canDraw: z.boolean(),
+});
