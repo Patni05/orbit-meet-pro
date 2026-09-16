@@ -1,0 +1,23 @@
+# LiveKit Egress — server-side recording.
+#
+# Started only with:  docker compose --profile recording up -d egress
+# Files land in ./recordings on the host.
+
+api_key: devkey
+api_secret: devsecretdevsecretdevsecretdevsecret
+ws_url: ws://livekit:7880
+
+redis:
+  address: redis:6379
+
+# Write finished recordings to the mounted volume rather than object storage.
+# Swap this for `s3:` or `azure:` in a real deployment — see docs/DEPLOYMENT.md.
+file_output:
+  local: true
+
+log_level: info
+health_port: 9090
+
+# Chromium renders the room composite; one job at a time is plenty for dev.
+cpu_cost:
+  room_composite_cpu_cost: 2

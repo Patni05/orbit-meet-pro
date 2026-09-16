@@ -1,0 +1,263 @@
+// Orbit — data model.
+//
+// Media never touches PostgreSQL. This schema stores identity, meeting
+// metadata, membership, chat history and audit events only.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SystemRole {
+  USER
+  ADMIN
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum ParticipantRole {
+  HOST
+  COHOST
+  PARTICIPANT
+}
+
+enum ParticipantStatus {
+  WAITING
+  ADMITTED
+  REJECTED
+  LEFT
+  REMOVED
+}
+
+enum RecordingStatus {
+  STARTING
+  ACTIVE
+  STOPPING
+  COMPLETED
+  FAILED
+}
+
+enum ScreenShareMode {
+  EVERYONE
+  HOSTS_ONLY
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  name         String
+  /// Argon2id hash. Plain-text passwords are never stored or logged.
+  passwordHash String
+  avatarUrl    String?
+  role         SystemRole @default(USER)
+  emailVerified Boolean   @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  lastActiveAt DateTime?
+
+  refreshTokens       RefreshToken[]
+  passwordResets      PasswordResetToken[]
+  hostedMeetings      Meeting[]            @relation("MeetingHost")
+  participations      MeetingParticipant[]
+  invitesSent         MeetingInvite[]      @relation("InviteSender")
+  chatMessages        ChatMessage[]
+  meetingEvents       MeetingEvent[]
+
+  @@index([lastActiveAt])
+}
+
+/// Rotating refresh tokens. Only the SHA-256 hash of the token is stored.
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  /// Chains rotations so reuse of a retired token can revoke the whole family.
+  familyId   String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedById String?
+  userAgent  String?
+  ipHash     String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Meeting {
+  id     String @id @default(uuid())
+  /// Public, high-entropy code used in URLs: `abcd-efgh-ijkl`.
+  code   String @unique
+  hostId String
+
+  title       String
+  description String?
+  /// Argon2id hash of the optional passcode. Never the passcode itself.
+  passwordHash String?
+
+  status      MeetingStatus @default(SCHEDULED)
+  locked      Boolean       @default(false)
+
+  scheduledAt     DateTime?
+  durationMinutes Int?
+  timezone        String?
+  startedAt       DateTime?
+  endedAt         DateTime?
+
+  // ---- settings (host policy, enforced server-side) ----
+  waitingRoomEnabled   Boolean         @default(false)
+  requireAuth          Boolean         @default(false)
+  allowGuests          Boolean         @default(true)
+  chatEnabled          Boolean         @default(true)
+  screenShareMode      ScreenShareMode @default(EVERYONE)
+  allowParticipantUnmute Boolean       @default(true)
+  muteOnEntry          Boolean         @default(false)
+  recordingEnabled     Boolean         @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  host         User                 @relation("MeetingHost", fields: [hostId], references: [id], onDelete: Cascade)
+  participants MeetingParticipant[]
+  invites      MeetingInvite[]
+  messages     ChatMessage[]
+  recordings   Recording[]
+  events       MeetingEvent[]
+
+  @@index([hostId, status])
+  @@index([scheduledAt])
+  @@index([status])
+}
+
+model MeetingParticipant {
+  id        String @id @default(uuid())
+  meetingId String
+  userId    String?
+
+  /// LiveKit identity + realtime key. Unique per meeting, stable across reconnects.
+  identity    String
+  /// Per-tab session id supplied by the client; lets a refresh resume this row.
+  sessionId   String?
+  displayName String
+  avatarUrl   String?
+  isGuest     Boolean @default(false)
+
+  role   ParticipantRole   @default(PARTICIPANT)
+  status ParticipantStatus @default(ADMITTED)
+
+  joinedAt     DateTime?
+  leftAt       DateTime?
+  lastSeenAt   DateTime  @default(now())
+  handRaisedAt DateTime?
+  connected    Boolean   @default(false)
+
+  micEnabled    Boolean @default(false)
+  cameraEnabled Boolean @default(false)
+  screenSharing Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([meetingId, identity])
+  @@index([meetingId, status])
+  @@index([userId])
+}
+
+model MeetingInvite {
+  id        String   @id @default(uuid())
+  meetingId String
+  invitedById String
+  email     String?
+  /// Optional single-use token for targeted invitations.
+  tokenHash String?  @unique
+  acceptedAt DateTime?
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  invitedBy User    @relation("InviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([email])
+}
+
+model ChatMessage {
+  id             String   @id @default(uuid())
+  meetingId      String
+  senderId       String?
+  senderIdentity String
+  senderName     String
+  /// Stored as plain text. Rendered as text by clients — never as HTML.
+  body           String
+  sentAt         DateTime @default(now())
+  deletedAt      DateTime?
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  sender  User?   @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([meetingId, sentAt])
+}
+
+model Recording {
+  id           String          @id @default(uuid())
+  meetingId    String
+  /// LiveKit egress id, used to stop the recording later.
+  egressId     String?         @unique
+  status       RecordingStatus @default(STARTING)
+  startedAt    DateTime        @default(now())
+  endedAt      DateTime?
+  fileLocation String?
+  sizeBytes    BigInt?
+  durationSec  Int?
+  startedById  String?
+  error        String?
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+}
+
+/// Append-only audit trail: joins, leaves, host actions, lock/end, errors.
+model MeetingEvent {
+  id        String   @id @default(uuid())
+  meetingId String
+  actorId   String?
+  actorIdentity String?
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([meetingId, createdAt])
+  @@index([type])
+}

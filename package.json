@@ -1,0 +1,52 @@
+{
+  "name": "orbit-meet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Orbit — open, self-hostable video meeting platform (WebRTC + LiveKit SFU)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @orbit/shared",
+    "dev:shared": "npm run dev -w @orbit/shared",
+    "dev:api": "npm run dev -w @orbit/api",
+    "dev:web": "npm run dev -w @orbit/web",
+    "dev": "npm run build:shared && concurrently -n shared,api,web -c magenta,cyan,green \"npm:dev:shared\" \"npm:dev:api\" \"npm:dev:web\"",
+    "build": "npm run build:shared && npm run build -w @orbit/api && npm run build -w @orbit/web",
+    "start:api": "npm run start -w @orbit/api",
+    "start:web": "npm run start -w @orbit/web",
+    "db:generate": "npm run db:generate -w @orbit/api",
+    "db:migrate": "npm run db:migrate -w @orbit/api",
+    "db:deploy": "npm run db:deploy -w @orbit/api",
+    "db:seed": "npm run db:seed -w @orbit/api",
+    "db:studio": "npm run db:studio -w @orbit/api",
+    "test": "npm run test -w @orbit/shared && npm run test -w @orbit/api && npm run test -w @orbit/web",
+    "test:api": "npm run test -w @orbit/api",
+    "test:web": "npm run test -w @orbit/web",
+    "test:e2e": "npm run test:e2e -w @orbit/web",
+    "lint": "npm run lint -w @orbit/api && npm run lint -w @orbit/web",
+    "typecheck": "npm run build:shared && npm run typecheck -w @orbit/api && npm run typecheck -w @orbit/web",
+    "infra:up": "docker compose up -d postgres redis livekit coturn",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f",
+    "setup": "node scripts/setup.mjs",
+    "test:shared": "npm run test -w @orbit/shared",
+    "lan": "node scripts/lan.mjs",
+    "lan:off": "node scripts/lan-off.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

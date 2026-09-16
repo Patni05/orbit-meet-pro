@@ -1,0 +1,44 @@
+# LiveKit SFU — development configuration.
+#
+# Production notes are in docs/DEPLOYMENT.md. The two things that change for a
+# real deployment are the keys (must be strong and secret) and TLS termination
+# in front of port 7880.
+
+port: 7880
+bind_addresses:
+  - '0.0.0.0'
+
+rtc:
+  # A single UDP port for all media. This keeps the Docker port mapping to one
+  # line instead of a range, which matters a lot on macOS and Windows.
+  udp_port: 7882
+  # TCP fallback for networks that block UDP entirely.
+  tcp_port: 7881
+  # The advertised IP is supplied on the command line (--node-ip) so the same
+  # config file works for localhost, LAN and public deployments.
+  use_external_ip: false
+
+# Development keys. Replace before exposing this to anything.
+# Generate with: docker run --rm livekit/livekit-server generate-keys
+keys:
+  devkey: devsecretdevsecretdevsecretdevsecret
+
+# Rooms are created implicitly when the first participant joins with a valid
+# token, and torn down shortly after the last one leaves.
+room:
+  auto_create: true
+  empty_timeout: 300
+  departure_timeout: 20
+  max_participants: 100
+
+# Required for the egress (recording) service to find LiveKit.
+redis:
+  address: redis:6379
+
+logging:
+  level: info
+  json: false
+
+# Prometheus scrape endpoint for observability.
+prometheus:
+  port: 6789
