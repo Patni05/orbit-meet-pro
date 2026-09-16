@@ -150,6 +150,55 @@ npm run test:e2e
 
 ---
 
+## Publishing it on the internet
+
+`npm run lan` is for your own Wi-Fi. To let anyone join from anywhere, put a
+Cloudflare Tunnel in front of it:
+
+```bash
+npm run lan           # start the local reverse proxy (once)
+npm run build         # production build — dev mode is far too slow over a tunnel
+npm run start         # run the built app
+npm run tunnel        # opens the tunnel, prints a public https:// URL
+```
+
+The tunnel presents a certificate Cloudflare already owns, so there is no
+warning to click through on any device — which matters, because camera access
+needs a secure context and users will not get one from a self-signed
+certificate they have dismissed.
+
+Leave `npm run tunnel` running; closing it retires the URL. A free tunnel gets
+a new hostname on every restart, so the script rewrites `.env` and you rebuild.
+
+### Media needs its own path
+
+A tunnel carries HTTP and WebSocket. **WebRTC audio and video are UDP**, and
+travel directly to whichever machine runs the SFU. Behind a home router that
+machine is not reachable from the internet, so people outside your network will
+join the room, see chat working, and hear nothing.
+
+People on your own Wi-Fi are unaffected — they reach the SFU directly.
+
+Two ways to fix it for everyone else:
+
+**A hosted SFU (simplest).** Create a free project at
+[cloud.livekit.io](https://cloud.livekit.io) and point media at it:
+
+```bash
+npm run livekit:cloud -- wss://your-project.livekit.cloud <api-key> <api-secret>
+npm run build && npm run start
+```
+
+Media then flows through LiveKit's own servers. No router configuration, works
+on mobile data, and no code changes — the app already speaks this protocol.
+`npm run livekit:cloud -- --revert` switches back to the local SFU.
+
+**Or forward a port.** Forward UDP `7882` to this machine and set
+`LIVEKIT_NODE_IP` to your public address. Free and keeps media on your own
+hardware, but many ISPs block it and a dynamic public IP will eventually move.
+
+---
+
 ## Everyday commands
 
 ```bash
