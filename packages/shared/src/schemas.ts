@@ -260,3 +260,33 @@ export const whiteboardPermissionSchema = z.object({
   identity: z.string().trim().min(1).max(128),
   canDraw: z.boolean(),
 });
+
+// ---------------------------------------------------------------------------
+// Locks, todos and presence checks
+// ---------------------------------------------------------------------------
+
+export const mediaLockSchema = z.object({
+  kind: z.enum(['mic', 'camera']),
+  locked: z.boolean(),
+});
+
+export const todoCreateSchema = z.object({
+  text: z.string().trim().min(1, 'Write something to do.').max(300),
+});
+
+export const todoUpdateSchema = z.object({
+  id: z.string().uuid(),
+  text: z.string().trim().min(1).max(300).optional(),
+  completed: z.boolean().optional(),
+});
+
+export const todoIdSchema = z.object({ id: z.string().uuid() });
+
+export const presenceConsentSchema = z.object({
+  /** True when the participant agrees to be asked for a presence check. */
+  allow: z.boolean(),
+});
+
+export const presenceRequestSchema = z.object({
+  identity: z.string().trim().min(1).max(128),
+});

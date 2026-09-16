@@ -2,6 +2,8 @@ import type { ChatMessagePayload, RoomParticipant, RoomState } from '@orbit/shar
 import { prisma } from '../lib/prisma';
 import { toRoomParticipant, toWaitingParticipant } from '../modules/meetings/join.service';
 import { listPollsFor } from '../modules/meetings/polls.service';
+import { listTodos } from '../modules/meetings/todos.service';
+import { listRecordings } from '../modules/meetings/recordings.service';
 import { toSummary, type MeetingWithHost } from '../modules/meetings/meetings.service';
 
 /** How much backlog a joiner receives. Enough for context, not a full archive. */
@@ -71,13 +73,15 @@ export async function buildRoomState(
 
   // Polls are shaped per viewer: an open poll's tally stays hidden from
   // participants until it closes, so the payload itself has to differ.
-  const [announcement, polls] = await Promise.all([
+  const [announcement, polls, todos, recordings] = await Promise.all([
     prisma.meetingAnnouncement.findFirst({
       where: { meetingId: meeting.id, dismissedAt: null },
       orderBy: { createdAt: 'desc' },
       include: { createdBy: { select: { name: true } } },
     }),
     listPollsFor(meeting.id, { participantId: self.id, isHost: isHostLike }),
+    listTodos(meeting.id),
+    isHostLike ? listRecordings(meeting.id) : Promise.resolve([]),
   ]);
 
   return {
@@ -91,6 +95,13 @@ export async function buildRoomState(
       recordingId: recording?.id ?? null,
       startedAt: recording?.startedAt.toISOString() ?? null,
     },
+    locks: { micLocked: meeting.micLocked, cameraLocked: meeting.cameraLocked },
+    todos,
+    // Recordings are the host's: a participant's payload simply does not
+    // contain them, so there is no id to guess at.
+    recordings: isHostLike ? recordings : [],
+    presenceCheck: self.presenceCheck as RoomState['presenceCheck'],
+    hostOnlyExit: meeting.hostOnlyExit,
     spotlight: meeting.spotlightIdentities,
     announcement: announcement
       ? {

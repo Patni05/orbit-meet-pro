@@ -231,7 +231,7 @@ export async function countActiveRooms(): Promise<number> {
 export async function startRoomRecording(params: {
   meetingCode: string;
   meetingId: string;
-}): Promise<{ egressId: string; fileLocation: string }> {
+}): Promise<{ egressId: string; fileLocation: string; fileName: string; mimeType: string }> {
   if (!env.RECORDING_ENABLED) {
     throw serviceUnavailable(
       ERROR_CODES.RECORDING_UNAVAILABLE,
@@ -239,20 +239,56 @@ export async function startRoomRecording(params: {
     );
   }
 
-  const filepath = `${env.RECORDING_OUTPUT_DIR}/${params.meetingCode}-{time}.mp4`;
-  const output = new EncodedFileOutput({ fileType: EncodedFileType.MP4, filepath });
+  /**
+   * Audio only, mixed into one track.
+   *
+   * A meeting is a conversation, and a single mixed audio file is both what
+   * people actually want afterwards and dramatically cheaper to produce: a
+   * composite video recording needs a headless browser per meeting and a great
+   * deal of CPU, where audio mixing is close to free.
+   *
+   * The filename is generated here rather than left to a wildcard, so the API
+   * knows exactly which file on disk belongs to which recording row. Egress
+   * expands {time} itself, which would leave the name unknown.
+   */
+  const fileName = `${params.meetingCode}-${Date.now()}.ogg`;
+  const filepath = `${env.RECORDING_OUTPUT_DIR}/${fileName}`;
+  const output = new EncodedFileOutput({ fileType: EncodedFileType.OGG, filepath });
 
   try {
-    const info: EgressInfo = await egressClient.startRoomCompositeEgress(roomNameFor(params.meetingCode), output, {
-      layout: 'grid',
-    });
-    return { egressId: info.egressId, fileLocation: filepath };
+    const info: EgressInfo = await egressClient.startRoomCompositeEgress(
+      roomNameFor(params.meetingCode),
+      output,
+      { audioOnly: true },
+    );
+    return {
+      egressId: info.egressId,
+      fileLocation: filepath,
+      fileName,
+      mimeType: 'audio/ogg',
+    };
   } catch (error) {
     logger.error({ err: error, meetingId: params.meetingId }, 'failed to start egress');
     throw serviceUnavailable(
       ERROR_CODES.RECORDING_UNAVAILABLE,
       'The recording service is unavailable right now.',
     );
+  }
+}
+
+/**
+ * Asks the SFU what became of an egress.
+ *
+ * Used after stopping to learn the final duration and whether the file was
+ * written, rather than assuming a stop request means a finished recording.
+ */
+export async function describeEgress(egressId: string): Promise<EgressInfo | null> {
+  try {
+    const list = await egressClient.listEgress({ egressId });
+    return list[0] ?? null;
+  } catch (error) {
+    logger.debug({ err: error, egressId }, 'could not describe egress');
+    return null;
   }
 }
 

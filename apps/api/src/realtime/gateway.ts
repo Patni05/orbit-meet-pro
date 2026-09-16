@@ -22,6 +22,12 @@ import {
   whiteboardModeSchema,
   whiteboardPermissionSchema,
   whiteboardStrokeSchema,
+  mediaLockSchema,
+  presenceConsentSchema,
+  presenceRequestSchema,
+  todoCreateSchema,
+  todoIdSchema,
+  todoUpdateSchema,
   spotlightSchema,
   type Ack,
   type ClientEvents,
@@ -74,6 +80,14 @@ import {
   setPermission,
   undoLastStroke,
 } from '../modules/meetings/whiteboard.service';
+import {
+  canManageTodos,
+  createTodo,
+  deleteTodo,
+  listTodos,
+  updateTodo,
+} from '../modules/meetings/todos.service';
+import { finaliseRecording, listRecordings } from '../modules/meetings/recordings.service';
 import {
   endMeeting,
   findById,
@@ -240,6 +254,9 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
 
   /** Lobby countdown before the first question, so starts feel simultaneous. */
   const QUIZ_LOBBY_MS = 3000;
+
+  /** How long a presence request stays open before it lapses. */
+  const PRESENCE_REQUEST_TTL_MS = 60_000;
 
   /** Pending auto-end timers, keyed by quiz id. */
   const quizTimers = new Map<string, NodeJS.Timeout>();
@@ -591,7 +608,6 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
       await redis.sadd(KEYS.liveMeetings, meetingId).catch(() => undefined);
 
       const state = await buildRoomState(meeting, participantId);
-      if (state) socket.emit('room:state', state);
 
       // Announce only genuinely new arrivals; a reconnect just flips the dot.
       if (!wasConnected) {
@@ -607,6 +623,26 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
       socket.on('media:update', async (payload, ack) => {
         const current = await loadContext(socket);
         if (!current) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'Meeting unavailable.');
+
+        /**
+         * Global media locks are enforced here, on the way in.
+         *
+         * This is the whole difference between a lock and a greyed-out button:
+         * a participant who crafts the event by hand, or keeps an old tab
+         * open, is refused just the same. Hosts are exempt, because locking
+         * the room should not silence the person running it.
+         */
+        const role = current.participant.role as ParticipantRole;
+        const isHostLike = role === 'HOST' || role === 'COHOST';
+
+        if (!isHostLike) {
+          if (payload.micEnabled === true && current.meeting.micLocked) {
+            return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Your microphone is locked by the host.');
+          }
+          if (payload.cameraEnabled === true && current.meeting.cameraLocked) {
+            return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Your camera is locked by the host.');
+          }
+        }
 
         const data: Partial<MeetingParticipant> = {};
         if (typeof payload.micEnabled === 'boolean') data.micEnabled = payload.micEnabled;
@@ -1046,7 +1082,7 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
             });
             if (existingRec) return ackErr(ack, 'ALREADY_RECORDING', 'A recording is already running.');
 
-            const { egressId, fileLocation } = await startRoomRecording({
+            const { egressId, fileLocation, fileName, mimeType } = await startRoomRecording({
               meetingCode: host.meeting.code,
               meetingId,
             });
@@ -1055,6 +1091,11 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
                 meetingId,
                 egressId,
                 fileLocation,
+                // Stored so the download route knows exactly which file on
+                // disk belongs to this row, rather than guessing from a glob.
+                fileName,
+                mimeType,
+                audioOnly: true,
                 status: 'ACTIVE',
                 startedById: host.participant.userId,
               },
@@ -1076,14 +1117,19 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
             if (!rec) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'No recording is running.');
 
             if (rec.egressId) await stopRoomRecording(rec.egressId);
-            const endedAt = new Date();
+
+            /**
+             * Stopping is a request, not a completion.
+             *
+             * The file is still being finalised for a moment afterwards, so
+             * the row goes to STOPPING and a background poll asks the SFU what
+             * actually happened before reporting a duration and size. Marking
+             * it COMPLETED here would offer the host a download that does not
+             * exist yet.
+             */
             await prisma.recording.update({
               where: { id: rec.id },
-              data: {
-                status: 'COMPLETED',
-                endedAt,
-                durationSec: Math.round((endedAt.getTime() - rec.startedAt.getTime()) / 1000),
-              },
+              data: { status: 'STOPPING' },
             });
 
             nsp.to(meetingRoom(meetingId)).emit('meeting:recording', {
@@ -1093,6 +1139,18 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
               by: host.participant.displayName,
             });
             await recordEvent(meetingId, host.participant.userId, identity, 'recording.stopped', {});
+
+            void (async () => {
+              await finaliseRecording(rec.id);
+              const recordings = await listRecordings(meetingId);
+              const finished = recordings.find((entry) => entry.id === rec.id);
+
+              // Hosts only: the list is never sent to participants.
+              nsp.to(hostsRoom(meetingId)).emit('recordings:updated', { recordings });
+              if (finished) {
+                nsp.to(hostsRoom(meetingId)).emit('recording:ready', { recording: finished });
+              }
+            })();
           }
           ackOk(ack, undefined as never);
         } catch (error) {
@@ -1783,9 +1841,276 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
         ackOk(ack, undefined as never);
       });
 
+      // -------------------------------------------------- global media locks
+
+      socket.on('host:media-lock', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = mediaLockSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const { kind, locked } = parsed.data;
+
+        await prisma.meeting.update({
+          where: { id: meetingId },
+          data: kind === 'mic' ? { micLocked: locked } : { cameraLocked: locked },
+        });
+
+        /**
+         * Turning the lock on also turns the devices off.
+         *
+         * A lock that only prevented *future* unmuting would leave whoever was
+         * already speaking still live, which is the opposite of what a host
+         * reaches for it to do. Hosts are exempt: locking the room should not
+         * silence the person running it.
+         */
+        if (locked) {
+          const targets = await prisma.meetingParticipant.findMany({
+            where: { meetingId, status: 'ADMITTED', role: 'PARTICIPANT' },
+            select: { id: true, identity: true },
+          });
+
+          for (const target of targets) {
+            await muteParticipantTracks(host.meeting.code, target.identity, kind === 'mic' ? 'audio' : 'video').catch(
+              () => undefined,
+            );
+            emitToParticipant(target.id, 'media:force-mute', {
+              by: host.participant.displayName,
+              kind: kind === 'mic' ? 'audio' : 'video',
+            });
+          }
+
+          await prisma.meetingParticipant.updateMany({
+            where: { meetingId, status: 'ADMITTED', role: 'PARTICIPANT' },
+            data: kind === 'mic' ? { micEnabled: false } : { cameraEnabled: false },
+          });
+        }
+
+        const meeting = await findById(meetingId);
+        const locks = {
+          micLocked: meeting?.micLocked ?? false,
+          cameraLocked: meeting?.cameraLocked ?? false,
+        };
+
+        nsp.to(meetingRoom(meetingId)).emit('locks:updated', {
+          locks,
+          by: host.participant.displayName,
+        });
+
+        await recordEvent(meetingId, host.participant.userId, host.participant.identity, 'MEDIA_LOCK', {
+          kind,
+          locked,
+        });
+        logger.info({ meetingId, kind, locked, by: host.participant.identity }, 'media lock changed');
+        ackOk(ack, undefined as never);
+      });
+
+      // ------------------------------------------------------------- todos
+
+      socket.on('host:todo-create', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+        if (!canManageTodos(ctx.meeting, ctx.participant)) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can manage the task list.');
+        }
+
+        const parsed = todoCreateSchema.safeParse(payload);
+        if (!parsed.success) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, parsed.error.issues[0]?.message ?? 'Invalid task.');
+        }
+
+        const todo = await createTodo({
+          meetingId,
+          text: sanitizeText(parsed.data.text),
+          createdById: ctx.participant.id,
+          createdByName: ctx.participant.displayName,
+        });
+
+        nsp.to(meetingRoom(meetingId)).emit('todos:updated', { todos: await listTodos(meetingId) });
+        ackOk(ack, todo);
+      });
+
+      socket.on('host:todo-update', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+        if (!canManageTodos(ctx.meeting, ctx.participant)) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can manage the task list.');
+        }
+
+        const parsed = todoUpdateSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid task.');
+
+        const todo = await updateTodo({
+          meetingId,
+          id: parsed.data.id,
+          ...(parsed.data.text !== undefined ? { text: sanitizeText(parsed.data.text) } : {}),
+          ...(parsed.data.completed !== undefined ? { completed: parsed.data.completed } : {}),
+        });
+        if (!todo) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That task no longer exists.');
+
+        nsp.to(meetingRoom(meetingId)).emit('todos:updated', { todos: await listTodos(meetingId) });
+        ackOk(ack, todo);
+      });
+
+      socket.on('host:todo-delete', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+        if (!canManageTodos(ctx.meeting, ctx.participant)) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can manage the task list.');
+        }
+
+        const parsed = todoIdSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const removed = await deleteTodo(meetingId, parsed.data.id);
+        if (!removed) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That task no longer exists.');
+
+        nsp.to(meetingRoom(meetingId)).emit('todos:updated', { todos: await listTodos(meetingId) });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:todo-permission', async (payload, ack) => {
+        // Only the meeting owner decides whether co-hosts share the list.
+        const ctx = await loadContext(socket);
+        if (!ctx || ctx.participant.role !== 'HOST') {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can change that.');
+        }
+
+        await prisma.meeting.update({
+          where: { id: meetingId },
+          data: { cohostsManageTodos: Boolean((payload as { allow?: boolean }).allow) },
+        });
+        ackOk(ack, undefined as never);
+      });
+
+      // -------------------------------------------------------- recordings
+
+      socket.on('host:recordings', async (_payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can see recordings.');
+        ackOk(ack, await listRecordings(meetingId));
+      });
+
+      // ---------------------------------------------------- presence check
+
+      socket.on('presence:consent', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const parsed = presenceConsentSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        // The participant's own answer, recorded as given. Consent is never
+        // inferred from silence and never set by anybody else.
+        const state = parsed.data.allow ? 'ALLOWED' : 'DENIED';
+        await prisma.meetingParticipant.update({
+          where: { id: ctx.participant.id },
+          data: { presenceCheck: state, presenceCheckedAt: new Date() },
+        });
+
+        nsp.to(hostsRoom(meetingId)).emit('presence:updated', {
+          identity: ctx.participant.identity,
+          state,
+        });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:presence-request', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = presenceRequestSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const target = await prisma.meetingParticipant.findUnique({
+          where: { meetingId_identity: { meetingId, identity: parsed.data.identity } },
+        });
+        if (!target) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That person has already left.');
+
+        /**
+         * Consent is required, and it is checked here rather than in the UI.
+         *
+         * Nothing in this flow turns a camera on. The browser will not permit
+         * it without a user gesture, and it should not: the participant sees a
+         * prompt and decides. This only asks.
+         */
+        if (target.presenceCheck !== 'ALLOWED' && target.presenceCheck !== 'CONFIRMED') {
+          return ackErr(
+            ack,
+            ERROR_CODES.FORBIDDEN,
+            'That participant has not agreed to presence checks.',
+          );
+        }
+
+        const expiresAt = new Date(Date.now() + PRESENCE_REQUEST_TTL_MS);
+        await prisma.meetingParticipant.update({
+          where: { id: target.id },
+          data: { presenceCheck: 'REQUESTED', presenceRequestedAt: new Date() },
+        });
+
+        emitToParticipant(target.id, 'presence:requested', {
+          by: host.participant.displayName,
+          expiresAt: expiresAt.toISOString(),
+        });
+        nsp.to(hostsRoom(meetingId)).emit('presence:updated', {
+          identity: target.identity,
+          state: 'REQUESTED',
+        });
+
+        // An unanswered request should not sit as "requested" forever.
+        setTimeout(() => {
+          void (async () => {
+            const current = await prisma.meetingParticipant.findUnique({ where: { id: target.id } });
+            if (current?.presenceCheck !== 'REQUESTED') return;
+            await prisma.meetingParticipant.update({
+              where: { id: target.id },
+              data: { presenceCheck: 'EXPIRED' },
+            });
+            nsp.to(hostsRoom(meetingId)).emit('presence:updated', {
+              identity: target.identity,
+              state: 'EXPIRED',
+            });
+          })();
+        }, PRESENCE_REQUEST_TTL_MS).unref();
+
+        await recordEvent(meetingId, host.participant.userId, host.participant.identity, 'PRESENCE_REQUEST', {
+          target: target.identity,
+        });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('presence:confirm', async (_payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        await prisma.meetingParticipant.update({
+          where: { id: ctx.participant.id },
+          data: { presenceCheck: 'CONFIRMED', presenceCheckedAt: new Date() },
+        });
+
+        nsp.to(hostsRoom(meetingId)).emit('presence:updated', {
+          identity: ctx.participant.identity,
+          state: 'CONFIRMED',
+        });
+        ackOk(ack, undefined as never);
+      });
+
       socket.on('ping:rt', (_payload, ack) => {
         ackOk(ack, { serverTime: new Date().toISOString() });
       });
+
+      /**
+       * Announce readiness last, once every handler is attached.
+       *
+       * Clients treat `room:state` as the signal that the connection is
+       * usable and often act on it immediately. Emitting it earlier — as this
+       * did — left a gap: for hosts there was an `await` between the emit and
+       * the remaining registrations, so an event sent straight back arrived
+       * before its listener existed and was dropped with no ack and no error,
+       * leaving the caller waiting forever.
+       */
+      if (state) socket.emit('room:state', state);
 
       socket.on('room:leave', async (_payload, ack) => {
         await handleDeparture(socket, 'LEFT');

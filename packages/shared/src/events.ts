@@ -12,6 +12,10 @@ import type {
   WhiteboardMode,
   WhiteboardState,
   WhiteboardStrokePayload,
+  MediaLocks,
+  PresenceCheckState,
+  RecordingPayload,
+  TodoPayload,
   ReactionEvent,
   RoomParticipant,
   RoomState,
@@ -112,6 +116,20 @@ export interface ServerEvents {
     allowed: string[];
     denied: string[];
   }) => void;
+
+  /** Meeting-wide microphone or camera lock changed. */
+  'locks:updated': (payload: { locks: MediaLocks; by: string }) => void;
+
+  'todos:updated': (payload: { todos: TodoPayload[] }) => void;
+
+  'recording:ready': (payload: { recording: RecordingPayload }) => void;
+  /** Host-only: the recording list changed. */
+  'recordings:updated': (payload: { recordings: RecordingPayload[] }) => void;
+
+  /** The host is asking this participant to confirm they are present. */
+  'presence:requested': (payload: { by: string; expiresAt: string }) => void;
+  /** Host-only: somebody's presence-check state changed. */
+  'presence:updated': (payload: { identity: string; state: PresenceCheckState }) => void;
 }
 
 /** Acks report authorization failures instead of silently dropping the action. */
@@ -190,6 +208,24 @@ export interface ClientEvents {
   'host:whiteboard-clear': (payload: Record<string, never>, ack?: Ack) => void;
   'host:whiteboard-mode': (payload: { mode: WhiteboardMode }, ack?: Ack) => void;
   'host:whiteboard-permission': (payload: { identity: string; canDraw: boolean }, ack?: Ack) => void;
+
+  'host:media-lock': (payload: { kind: 'mic' | 'camera'; locked: boolean }, ack?: Ack) => void;
+
+  'host:todo-create': (payload: { text: string }, ack?: Ack<TodoPayload>) => void;
+  'host:todo-update': (
+    payload: { id: string; text?: string; completed?: boolean },
+    ack?: Ack<TodoPayload>,
+  ) => void;
+  'host:todo-delete': (payload: { id: string }, ack?: Ack) => void;
+  'host:todo-permission': (payload: { allow: boolean }, ack?: Ack) => void;
+
+  'host:recordings': (payload: Record<string, never>, ack?: Ack<RecordingPayload[]>) => void;
+
+  /** The participant answers the consent question; nothing is assumed. */
+  'presence:consent': (payload: { allow: boolean }, ack?: Ack) => void;
+  'host:presence-request': (payload: { identity: string }, ack?: Ack) => void;
+  /** The participant confirms they are present, having enabled their camera. */
+  'presence:confirm': (payload: Record<string, never>, ack?: Ack) => void;
 
   'ping:rt': (payload: Record<string, never>, ack?: Ack<{ serverTime: string }>) => void;
 }

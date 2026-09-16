@@ -10,6 +10,7 @@
  */
 
 import { io } from 'socket.io-client';
+import { clearRateLimits, requireToken, waitForApi } from './_harness.mjs';
 
 const API = process.argv[2] ?? process.env.API_URL ?? 'http://127.0.0.1:4000';
 const RT_BASE = process.env.RT_URL ?? new URL(API).origin;
@@ -50,7 +51,7 @@ async function register(name) {
     method: 'POST',
     body: { name, email: `${name.toLowerCase()}${stamp()}@example.test`, password: 'Str0ngPassw0rd!' },
   });
-  return body.accessToken;
+  return requireToken(body, name);
 }
 
 function connect(sessionToken) {
@@ -90,28 +91,13 @@ function waitFor(socket, event, ms = 8000) {
   });
 }
 
-async function waitForApi(attempts = 20) {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(`${API}/health`, { signal: AbortSignal.timeout(5000) });
-      if (response.ok) {
-        const body = await response.json();
-        if (body?.checks?.database === 'ok' && body?.checks?.redis === 'ok') return;
-      }
-    } catch {
-      // Not up yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw new Error(`API at ${API} did not become healthy`);
-}
-
 const pen = (points) => ({ tool: 'pen', color: '#ef4444', width: 4, points });
 
 async function main() {
   console.log(`\nWhiteboard integration test against ${API}\n`);
 
-  await waitForApi();
+  await waitForApi(API);
+  await clearRateLimits();
 
   const hostToken = await register('Ada');
   const { body: created } = await api('/meetings', {

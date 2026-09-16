@@ -129,6 +129,16 @@ export interface RoomState {
   announcement: AnnouncementPayload | null;
   /** Polls this viewer is allowed to see: open ones, plus closed ones. */
   polls: PollPayload[];
+  /** Meeting-wide media locks, enforced server-side. */
+  locks: MediaLocks;
+  /** The host's task list. Visible to everyone; only hosts may change it. */
+  todos: TodoPayload[];
+  /** Recordings for this meeting. Host-only; empty for everyone else. */
+  recordings: RecordingPayload[];
+  /** This participant's own presence-check consent and state. */
+  presenceCheck: PresenceCheckState;
+  /** Whether only the host may end the meeting for everyone. */
+  hostOnlyExit: boolean;
   /** Server clock, so clients can compute meeting duration without trusting local time. */
   serverTime: string;
 }
@@ -442,4 +452,52 @@ export interface WhiteboardState {
   allowed: string[];
   denied: string[];
   strokes: WhiteboardStrokePayload[];
+}
+
+// ---------------------------------------------------------------------------
+// Global media locks, todos, presence checks and recordings
+// ---------------------------------------------------------------------------
+
+/**
+ * Meeting-wide media locks.
+ *
+ * Distinct from muting everyone once: a lock persists, and while it is on the
+ * server refuses an ordinary participant's attempt to publish. The client
+ * greys the control out as a courtesy, but that is not what enforces it.
+ */
+export interface MediaLocks {
+  micLocked: boolean;
+  cameraLocked: boolean;
+}
+
+export type PresenceCheckState =
+  | 'NOT_ASKED'
+  | 'ALLOWED'
+  | 'DENIED'
+  | 'REQUESTED'
+  | 'CONFIRMED'
+  | 'EXPIRED';
+
+export interface TodoPayload {
+  id: string;
+  text: string;
+  completed: boolean;
+  completedAt: string | null;
+  createdByName: string;
+  position: number;
+  createdAt: string;
+}
+
+export interface RecordingPayload {
+  id: string;
+  status: RecordingStatus;
+  startedAt: string;
+  endedAt: string | null;
+  durationSec: number | null;
+  sizeBytes: number | null;
+  audioOnly: boolean;
+  fileName: string | null;
+  mimeType: string | null;
+  /** Present only for someone allowed to download it. */
+  downloadUrl?: string | null;
 }

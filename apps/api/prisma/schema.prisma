@@ -156,6 +156,20 @@ model Meeting {
   whiteboardAllowed String[] @default([])
   whiteboardDenied  String[] @default([])
 
+  /// Global media locks.
+  ///
+  /// Distinct from a plain mute-all: while a lock is on, ordinary
+  /// participants cannot turn the device back on, and the server refuses the
+  /// attempt rather than the interface merely hiding a button.
+  micLocked    Boolean @default(false)
+  cameraLocked Boolean @default(false)
+
+  /// Off by default: the task list belongs to whoever runs the meeting.
+  cohostsManageTodos Boolean @default(false)
+
+  /// Only the host may end the meeting for everyone.
+  hostOnlyExit Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -170,6 +184,7 @@ model Meeting {
   polls        Poll[]
   quizzes      Quiz[]
   strokes      WhiteboardStroke[]
+  todos        MeetingTodo[]
 
   @@index([hostId, status])
   @@index([scheduledAt])
@@ -209,6 +224,13 @@ model MeetingParticipant {
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   pollVotes PollVote[]
   quizAttempts QuizParticipant[]
+
+  /// Consent for the host to request a camera presence check, and where that
+  /// request currently stands. Never used to enable a camera on its own: the
+  /// browser will not allow that, and it should not.
+  presenceCheck       PresenceCheckState @default(NOT_ASKED)
+  presenceCheckedAt   DateTime?
+  presenceRequestedAt DateTime?
 
   @@unique([meetingId, identity])
   @@index([meetingId, status])
@@ -263,6 +285,13 @@ model Recording {
   durationSec  Int?
   startedById  String?
   error        String?
+  /// Audio-only by default: one mixed track of the conversation, which is
+  /// what a meeting is actually for.
+  audioOnly    Boolean @default(true)
+  /// Server-side filename. Downloads are authorised per request and never
+  /// served from a guessable public path.
+  fileName     String?
+  mimeType     String?
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
@@ -636,4 +665,52 @@ model WhiteboardStroke {
   /// The database refuses the duplicate and the service retries.
   @@unique([meetingId, seq])
   @@index([meetingId, seq])
+}
+
+// ---------------------------------------------------------------------------
+// Admin task list
+// ---------------------------------------------------------------------------
+
+/// A task the host jots down during a meeting.
+///
+/// Scoped to the meeting and stored properly rather than kept in component
+/// state, so refreshing the page — or rejoining after a drop — does not lose
+/// the list.
+model MeetingTodo {
+  id        String @id @default(uuid())
+  meetingId String
+
+  text        String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  createdById     String
+  createdByName   String
+  /// Display order, so the list does not reshuffle as items are toggled.
+  position        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId, position])
+}
+
+// ---------------------------------------------------------------------------
+// Presence check
+// ---------------------------------------------------------------------------
+
+/// Whether a participant agreed to the host asking for a camera presence check.
+///
+/// Consent is recorded explicitly and scoped to one meeting. Nothing here
+/// grants the ability to turn a camera on remotely — the browser will not
+/// allow that, and it should not. This only records that the participant is
+/// willing to be *asked*.
+enum PresenceCheckState {
+  NOT_ASKED
+  ALLOWED
+  DENIED
+  REQUESTED
+  CONFIRMED
+  EXPIRED
 }

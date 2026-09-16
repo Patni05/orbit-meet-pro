@@ -11,6 +11,7 @@
  */
 
 import { io } from 'socket.io-client';
+import { clearRateLimits, requireToken, waitForApi } from './_harness.mjs';
 
 const API = process.argv[2] ?? process.env.API_URL ?? 'http://127.0.0.1:4000';
 const RT_BASE = process.env.RT_URL ?? new URL(API).origin;
@@ -52,7 +53,7 @@ async function register(name) {
     method: 'POST',
     body: { name, email: `${name.toLowerCase()}${stamp()}@example.test`, password: 'Str0ngPassw0rd!' },
   });
-  return body.accessToken;
+  return requireToken(body, name);
 }
 
 function connect(sessionToken) {
@@ -161,33 +162,12 @@ async function joinAs(code, name, token) {
   return body;
 }
 
-/**
- * Waits until the API is genuinely serving.
- *
- * A freshly started server spends its first seconds opening database and Redis
- * connections, and this suite has real deadlines in it — a cold start would
- * show up as a timing failure that says nothing about the code.
- */
-async function waitForApi(attempts = 20) {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(`${API}/health`, { signal: AbortSignal.timeout(5000) });
-      if (response.ok) {
-        const body = await response.json();
-        if (body?.checks?.database === 'ok' && body?.checks?.redis === 'ok') return;
-      }
-    } catch {
-      // Not up yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw new Error(`API at ${API} did not become healthy`);
-}
 
 async function main() {
   console.log(`\nLive quiz integration test against ${API}\n`);
 
-  await waitForApi();
+  await waitForApi(API);
+  await clearRateLimits();
 
   const { hostToken, code } = await setupMeeting();
   const hostJoin = await joinAs(code, 'Ada Host', hostToken);

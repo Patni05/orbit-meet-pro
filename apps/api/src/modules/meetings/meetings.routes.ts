@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   buildInvitationText,
@@ -7,10 +9,12 @@ import {
   meetingCodeSchema,
   updateMeetingSchema,
 } from '@orbit/shared';
-import { forbidden, notFound, parseOrThrow, unauthorized } from '../../lib/errors';
+import { ERROR_CODES } from '@orbit/shared';
+import { AppError, forbidden, notFound, parseOrThrow, unauthorized } from '../../lib/errors';
 import { prisma } from '../../lib/prisma';
 import { getUserById } from '../auth/auth.service';
 import { joinMeeting } from './join.service';
+import { canDownloadRecording, recordingFilePath } from './recordings.service';
 import * as meetings from './meetings.service';
 
 const meetingRoutes: FastifyPluginAsync = async (fastify) => {
@@ -215,6 +219,59 @@ const meetingRoutes: FastifyPluginAsync = async (fastify) => {
       })),
     });
   });
+
+  /**
+   * Downloads a meeting recording.
+   *
+   * Authorisation is per request and checks both facts that matter: that the
+   * caller is signed in, and that they are a host of *this* meeting. Being a
+   * host somewhere else is exactly what a guessed id would try to exploit.
+   *
+   * The files are never served from a static directory, so there is no path
+   * that skips this check — a URL alone is not a capability.
+   */
+  fastify.get(
+    '/:id/recordings/:recordingId/download',
+    {
+      preHandler: [fastify.requireAuth],
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      const { id, recordingId } = request.params as { id: string; recordingId: string };
+
+      const check = await canDownloadRecording({
+        recordingId,
+        meetingId: id,
+        userId: request.auth?.userId ?? null,
+      });
+
+      if (!check.allowed || !check.fileName) {
+        // Deliberately the same answer whether the recording is missing or
+        // merely not theirs, so this cannot be used to probe for ids.
+        throw forbidden('You do not have access to that recording.');
+      }
+
+      const filePath = recordingFilePath(check.fileName);
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new AppError(
+          404,
+          ERROR_CODES.NOT_FOUND,
+          'That recording file is not available on this server.',
+        );
+      }
+
+      const stat = fs.statSync(filePath);
+
+      reply
+        .header('Content-Type', check.mimeType ?? 'application/octet-stream')
+        .header('Content-Length', String(stat.size))
+        .header('Content-Disposition', `attachment; filename="${path.basename(check.fileName)}"`)
+        // A recording is private; nothing should cache it on the way.
+        .header('Cache-Control', 'private, no-store');
+
+      return reply.send(fs.createReadStream(filePath));
+    },
+  );
 };
 
 export default meetingRoutes;
