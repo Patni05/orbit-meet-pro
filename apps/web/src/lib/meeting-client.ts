@@ -27,6 +27,8 @@ import {
   type BlocklistEntry,
   type PollPayload,
   type ReactionKey,
+  type RecordingPayload,
+  type TodoPayload,
   type WhiteboardMode,
   type WhiteboardState,
   type WhiteboardStrokePayload,
@@ -34,6 +36,7 @@ import {
   type ServerEvents,
 } from '@orbit/shared';
 import { RT_URL } from './api';
+import { capabilities } from './capabilities';
 import { useRoomStore, type TrackBundle } from './room-store';
 
 /**
@@ -70,6 +73,17 @@ function lkVideoOptions(deviceId?: string): VideoCaptureOptions {
     resolution: VideoPresets.h720.resolution,
   };
 }
+
+/**
+ * How long a reaction stays in the store.
+ *
+ * Kept a little longer than the CSS rise (4.2s) plus its largest stagger
+ * (220ms), so the element is always removed after it has finished animating
+ * rather than during. The two are coupled: shortening the animation without
+ * shortening this only leaves a finished reaction sitting invisible, but
+ * shortening this without the animation makes reactions disappear in mid-air.
+ */
+const REACTION_LIFETIME_MS = 4600;
 
 const roomOptions: RoomOptions = {
   /**
@@ -291,8 +305,10 @@ class MeetingClient {
       this.reactionSeq += 1;
       const id = `r${this.reactionSeq}`;
       this.store.pushReaction({ id, identity, name, reaction: reaction as ReactionKey });
-      // Reactions are transient by design — they clear themselves.
-      setTimeout(() => this.store.dropReaction(id), 2600);
+      // Reactions are transient by design — they clear themselves. This must
+      // outlast the rise animation plus its stagger, or the element is
+      // unmounted mid-flight and the reaction vanishes halfway up the screen.
+      setTimeout(() => this.store.dropReaction(id), REACTION_LIFETIME_MS);
     });
 
     socket.on('chat:message', (message) => {
@@ -413,6 +429,63 @@ class MeetingClient {
 
     socket.on('host:transferred', ({ name }) => {
       this.store.notify('info', `${name} is now the host`);
+    });
+
+    // ---------------------------------------------------- locks and tasks
+
+    socket.on('locks:updated', ({ locks, by }) => {
+      const previous = this.store.locks;
+      this.store.setLocks(locks);
+
+      // Only announce what actually changed, so flipping the camera lock does
+      // not also claim something about the microphone.
+      if (locks.micLocked !== previous.micLocked) {
+        this.store.notify(
+          locks.micLocked ? 'warn' : 'info',
+          locks.micLocked
+            ? `${by} locked microphones for participants`
+            : `${by} unlocked microphones`,
+        );
+      }
+      if (locks.cameraLocked !== previous.cameraLocked) {
+        this.store.notify(
+          locks.cameraLocked ? 'warn' : 'info',
+          locks.cameraLocked ? `${by} locked cameras for participants` : `${by} unlocked cameras`,
+        );
+      }
+    });
+
+    socket.on('todos:updated', ({ todos }) => {
+      this.store.setTodos(todos);
+    });
+
+    socket.on('todos:permission', ({ cohostsManageTodos }) => {
+      this.store.setCohostsManageTodos(cohostsManageTodos);
+    });
+
+    socket.on('recordings:updated', ({ recordings }) => {
+      this.store.setRecordings(recordings);
+    });
+
+    socket.on('recording:ready', ({ recording }) => {
+      this.store.setRecordings([
+        recording,
+        ...this.store.recordings.filter((r) => r.id !== recording.id),
+      ]);
+      this.store.notify('success', 'The recording has finished processing and is ready to download.');
+    });
+
+    // ------------------------------------------------------ presence checks
+
+    socket.on('presence:requested', ({ by, expiresAt }) => {
+      this.store.setPresenceRequest({ by, expiresAt });
+      this.store.setPresenceCheck('REQUESTED');
+    });
+
+    socket.on('presence:updated', ({ identity, state }) => {
+      // Host-only: someone else's state changed. The host's own view of a
+      // participant lives on the participant record.
+      this.store.patchParticipant(identity, { presenceCheck: state });
     });
 
     socket.on('notice', ({ kind, message }) => {
@@ -585,9 +658,35 @@ class MeetingClient {
       return { ok: true };
     } catch (error) {
       const name = (error as DOMException)?.name;
-      if (name === 'NotAllowedError' || name === 'AbortError') {
+      const mobile = capabilities().isMobile;
+
+      /*
+       * Telling a refusal apart from a cancellation.
+       *
+       * On a desktop browser `NotAllowedError` almost always means the user
+       * dismissed the picker, which is a normal choice and deserves silence.
+       * On a phone it usually means the browser has no screen capture at all
+       * and rejected the call outright — there was no picker to dismiss. The
+       * old code treated both as a cancellation, so tapping "Present" on
+       * Android did nothing at all and said nothing about why.
+       */
+      if (name === 'AbortError' || (name === 'NotAllowedError' && !mobile)) {
         return { ok: false, cancelled: true };
       }
+
+      if (name === 'NotSupportedError' || name === 'TypeError' || (name === 'NotAllowedError' && mobile)) {
+        return {
+          ok: false,
+          message: mobile
+            ? 'This phone or browser cannot share a screen. You can still present from a computer, or share a link in chat.'
+            : 'This browser does not support screen sharing.',
+        };
+      }
+
+      if (name === 'NotReadableError') {
+        return { ok: false, message: 'The screen could not be captured. Another app may be blocking it.' };
+      }
+
       return {
         ok: false,
         message: 'Screen sharing could not start. Your browser or the meeting settings may not allow it.',
@@ -707,6 +806,60 @@ class MeetingClient {
   async loadBlocklist(): Promise<void> {
     const result = await this.request<BlocklistEntry[]>('host:blocklist', {});
     if (result.ok && Array.isArray(result.data)) this.store.setBlocklist(result.data);
+  }
+
+  // ------------------------------------------------------- media locks
+
+  /**
+   * Locks or unlocks a device for every ordinary participant.
+   *
+   * The server applies the lock and refuses `media:update` while it holds;
+   * this call only asks. Nothing here disables anything locally, because a
+   * client that decided its own locks would be a lock in name only.
+   */
+  setMediaLock = (kind: 'mic' | 'camera', locked: boolean) =>
+    this.hostAction('host:media-lock', { kind, locked });
+
+  // ------------------------------------------------------------- tasks
+
+  createTodo = (text: string) => this.request<TodoPayload>('host:todo-create', { text });
+  updateTodo = (id: string, patch: { text?: string; completed?: boolean }) =>
+    this.request<TodoPayload>('host:todo-update', { id, ...patch });
+  deleteTodo = (id: string) => this.hostAction('host:todo-delete', { id });
+  /** Lets co-hosts manage the list too. The host alone may change this. */
+  setTodoPermission = (allow: boolean) => this.hostAction('host:todo-permission', { allow });
+
+  // -------------------------------------------------------- recordings
+
+  /** Loads the recording list on demand; the server refuses this for non-hosts. */
+  async loadRecordings(): Promise<void> {
+    const result = await this.request<RecordingPayload[]>('host:recordings', {});
+    if (result.ok && Array.isArray(result.data)) this.store.setRecordings(result.data);
+  }
+
+  // --------------------------------------------------- presence checks
+
+  /**
+   * Records this participant's own answer to "may the host check you are
+   * here?".
+   *
+   * Consent is given by the participant and by nobody else — there is no host
+   * call that sets it, which is why this one is not a `hostAction`.
+   */
+  async setPresenceConsent(allow: boolean): Promise<{ ok: boolean; message?: string }> {
+    const result = await this.hostAction('presence:consent', { allow });
+    if (result.ok) this.store.setPresenceCheck(allow ? 'ALLOWED' : 'DENIED');
+    return result;
+  }
+
+  /** Asks one participant to confirm they are there. They may still ignore it. */
+  requestPresence = (identity: string) => this.hostAction('host:presence-request', { identity });
+
+  /** The participant's own answer to an outstanding prompt. */
+  async confirmPresence(): Promise<{ ok: boolean; message?: string }> {
+    const result = await this.hostAction('presence:confirm', {});
+    if (result.ok) this.store.setPresenceCheck('CONFIRMED');
+    return result;
   }
 
   createPoll = (payload: {

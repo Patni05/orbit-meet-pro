@@ -94,6 +94,13 @@ export interface RoomParticipant {
   cameraEnabled: boolean;
   screenSharing: boolean;
   connected: boolean;
+  /**
+   * This participant's consent to presence checks, and the state of any check.
+   *
+   * Only ever a state machine value — never an image, a device or a location.
+   * A host uses it to know who may be asked; it does not let them look.
+   */
+  presenceCheck: PresenceCheckState;
 }
 
 export interface WaitingParticipant {
@@ -133,6 +140,8 @@ export interface RoomState {
   locks: MediaLocks;
   /** The host's task list. Visible to everyone; only hosts may change it. */
   todos: TodoPayload[];
+  /** Whether co-hosts may change the task list. The host alone sets this. */
+  cohostsManageTodos: boolean;
   /** Recordings for this meeting. Host-only; empty for everyone else. */
   recordings: RecordingPayload[];
   /** This participant's own presence-check consent and state. */

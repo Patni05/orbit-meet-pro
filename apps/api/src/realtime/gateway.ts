@@ -1169,6 +1169,23 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
         const host = await requireHost(socket);
         if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
 
+        /*
+         * Ending the meeting is the owner's alone while `hostOnlyExit` is set.
+         *
+         * `requireHost` admits co-hosts, which is right for moderation but
+         * wrong for this: closing the room on everybody is not a moderation
+         * action, and a co-host is a delegate rather than a replacement. The
+         * role is re-read from the database inside `requireHost` on every
+         * call, so promoting or demoting somebody takes effect immediately.
+         */
+        if (host.meeting.hostOnlyExit && host.participant.role !== 'HOST') {
+          return ackErr(
+            ack,
+            ERROR_CODES.FORBIDDEN,
+            'Only the host can end this meeting for everyone.',
+          );
+        }
+
         const ended = await endMeeting(meetingId, {
           userId: host.participant.userId,
           identity,
@@ -1977,10 +1994,16 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
           return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can change that.');
         }
 
+        const allow = Boolean((payload as { allow?: boolean }).allow);
         await prisma.meeting.update({
           where: { id: meetingId },
-          data: { cohostsManageTodos: Boolean((payload as { allow?: boolean }).allow) },
+          data: { cohostsManageTodos: allow },
         });
+
+        // Everyone is told, not just the co-hosts: a participant watching the
+        // list should see the same thing the server will enforce, and a
+        // co-host's controls have to appear without them reloading.
+        nsp.to(meetingRoom(meetingId)).emit('todos:permission', { cohostsManageTodos: allow });
         ackOk(ack, undefined as never);
       });
 

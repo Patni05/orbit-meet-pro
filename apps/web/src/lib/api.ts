@@ -254,6 +254,55 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return (await response.json()) as T;
 }
 
+/**
+ * Downloads a protected file and hands it to the browser's save dialog.
+ *
+ * A plain `<a href download>` cannot carry the access token — authentication
+ * here is a bearer header, not a cookie — so the anchor would arrive
+ * unauthenticated and be refused. Fetching it means the same session and the
+ * same server-side role check apply as to any other call, which is the point:
+ * a recording is never exposed at a URL that works without credentials, so
+ * there is nothing to leak by sharing the link.
+ *
+ * The object URL is revoked immediately after the click; it lives only long
+ * enough for the browser to take the blob.
+ */
+export async function downloadAuthenticated(path: string, suggestedName?: string): Promise<void> {
+  const send = (token: string | null) =>
+    fetch(`${API_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
+    });
+
+  let response: Response;
+  try {
+    response = await send(accessToken);
+    if (response.status === 401) {
+      const fresh = await refreshAccessToken();
+      if (fresh) response = await send(fresh);
+    }
+  } catch {
+    throw new ApiError(0, 'NETWORK', 'Cannot reach the server. Check your connection.');
+  }
+
+  if (!response.ok) throw await parseError(response);
+
+  // Prefer the name the server chose; it knows the real container format.
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const filename = match?.[1] ?? suggestedName ?? 'recording';
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ------------------------------------------------------------------ endpoints
 
 export const api = {

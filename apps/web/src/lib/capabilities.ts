@@ -70,8 +70,21 @@ function detect(): Capabilities {
 
   return {
     userMedia: Boolean(media?.getUserMedia),
-    // iOS Safari exposes getDisplayMedia on the object but always rejects it.
-    screenShare: Boolean(media && 'getDisplayMedia' in media) && !isIOS,
+    /*
+     * Screen capture.
+     *
+     * A real function check, not a UA guess — `'getDisplayMedia' in media` is
+     * true on browsers that expose the name and then reject every call, so it
+     * produced a button that could not work.
+     *
+     * iOS is still excluded outright: WebKit does not implement screen capture
+     * for web pages at all, on any iOS browser, because they are all WebKit.
+     * Everywhere else we offer it and let the browser answer — Android support
+     * varies by version and by whether the tab is in desktop mode, and a
+     * device that can share should not be refused because of its user agent.
+     * `setScreenShare` reports the real reason if the attempt fails.
+     */
+    screenShare: typeof media?.getDisplayMedia === 'function' && !isIOS,
     webrtc: typeof RTCPeerConnection !== 'undefined',
     speakerSelection: typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype,
     fullscreen:
@@ -111,8 +124,10 @@ export function unavailableReason(feature: keyof Capabilities): string | null {
   switch (feature) {
     case 'screenShare':
       return caps.isIOS
-        ? 'Screen sharing is not available in browsers on iPhone or iPad.'
-        : 'This browser does not support screen sharing.';
+        ? 'Screen sharing is not available in browsers on iPhone or iPad. You can still join, talk and present from a computer.'
+        : caps.isMobile
+          ? 'This mobile browser cannot share a screen. Try Chrome on Android, or present from a computer.'
+          : 'This browser does not support screen sharing.';
     case 'speakerSelection':
       return 'This browser does not let web pages choose the speaker. Change the output device in your system settings.';
     case 'pictureInPicture':

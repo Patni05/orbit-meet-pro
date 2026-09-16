@@ -13,6 +13,9 @@ import {
   Hand,
   Keyboard,
   LayoutGrid,
+  ListTodo,
+  Lock,
+  LockOpen,
   MessageSquare,
   Mic,
   MicOff,
@@ -30,7 +33,12 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { capabilities, unavailableReason } from '@/lib/capabilities';
-import { useRoomStore } from '@/lib/room-store';
+import { meetingClient } from '@/lib/meeting-client';
+import {
+  selectCameraLockedForMe,
+  selectMicLockedForMe,
+  useRoomStore,
+} from '@/lib/room-store';
 
 export interface ControlBarProps {
   onToggleMic: () => void;
@@ -72,6 +80,10 @@ export function ControlBar(props: ControlBarProps) {
   const selfRole = useRoomStore((state) => state.selfRole);
   const chatEnabled = useRoomStore((state) => state.meeting?.settings.chatEnabled ?? true);
   const recordingAllowed = useRoomStore((state) => state.meeting?.settings.recordingEnabled ?? false);
+  const locks = useRoomStore((state) => state.locks);
+  const micLocked = useRoomStore(selectMicLockedForMe);
+  const cameraLocked = useRoomStore(selectCameraLockedForMe);
+  const unreadTodos = useRoomStore((state) => state.unreadTodos);
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -116,12 +128,18 @@ export function ControlBar(props: ControlBarProps) {
           onOpenWhiteboard={() => setPanel('whiteboard')}
           onOpenAnnounce={props.onOpenAnnounce}
           onOpenBlocklist={() => setPanel('blocklist')}
+          onOpenTodos={() => setPanel('todos')}
+          onOpenRecordings={() => setPanel('recordings')}
+          locks={locks}
           onToggleFocus={props.onToggleFocus}
           onPictureInPicture={props.onPictureInPicture}
         />
       )}
 
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-2 px-3 sm:h-20 sm:px-4">
+      {/* At 320px the row is six 44px targets plus gaps, which is 306px before
+          padding — so the gutter and the gaps tighten on the narrowest phones
+          rather than the targets shrinking below a thumb's width. */}
+      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-2 px-2 sm:h-20 sm:px-4">
         {/* Meeting identity is shown on the top bar; keep the left slot for
             balance on wide screens only. */}
         <div className="hidden min-w-0 flex-1 items-center gap-2 sm:flex">
@@ -134,22 +152,41 @@ export function ControlBar(props: ControlBarProps) {
         </div>
 
         {/* ------------------------------------------------- primary controls */}
-        <div className="flex flex-1 items-center justify-center gap-1.5 sm:flex-none sm:gap-2">
+        <div className="flex flex-1 items-center justify-center gap-1 sm:flex-none sm:gap-2">
+          {/* A locked control is shown as locked and refuses the click. This is
+              a courtesy so the reason is visible — the gateway rejects the
+              underlying `media:update` regardless of what this button does. */}
           <ControlButton
-            label={micEnabled ? 'Mute' : 'Unmute'}
+            label={
+              micLocked
+                ? 'The host has locked microphones'
+                : micEnabled
+                  ? 'Mute'
+                  : 'Unmute'
+            }
             shortcut="M"
             active={!micEnabled}
-            danger={!micEnabled}
+            danger={!micEnabled && !micLocked}
+            locked={micLocked}
+            disabled={micLocked && !micEnabled}
             onClick={props.onToggleMic}
             icon={micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
             pressed={micEnabled}
           />
 
           <ControlButton
-            label={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
+            label={
+              cameraLocked
+                ? 'The host has locked cameras'
+                : cameraEnabled
+                  ? 'Turn camera off'
+                  : 'Turn camera on'
+            }
             shortcut="V"
             active={!cameraEnabled}
-            danger={!cameraEnabled}
+            danger={!cameraEnabled && !cameraLocked}
+            locked={cameraLocked}
+            disabled={cameraLocked && !cameraEnabled}
             onClick={props.onToggleCamera}
             icon={cameraEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
             pressed={cameraEnabled}
@@ -216,7 +253,7 @@ export function ControlBar(props: ControlBarProps) {
               type="button"
               onClick={props.onLeave}
               aria-label="Leave the meeting"
-              className="ml-1 flex h-11 items-center justify-center gap-2 rounded-full bg-danger-600 px-4 text-white transition-colors hover:bg-danger-500 sm:h-12 sm:px-6"
+              className="ml-0.5 flex h-11 w-11 items-center justify-center gap-2 rounded-full bg-danger-600 text-white transition-colors hover:bg-danger-500 sm:ml-1 sm:h-12 sm:w-auto sm:px-6"
             >
               <PhoneOff className="h-5 w-5" />
               <span className="hidden text-sm font-medium sm:inline">Leave</span>
@@ -253,6 +290,7 @@ function ControlButton({
   badgeTone = 'brand',
   count,
   pressed,
+  locked,
 }: {
   label: string;
   shortcut?: string;
@@ -265,6 +303,7 @@ function ControlButton({
   badgeTone?: 'brand' | 'warning';
   count?: number;
   pressed?: boolean;
+  locked?: boolean;
 }) {
   return (
     <Tooltip label={label} shortcut={shortcut}>
@@ -275,16 +314,29 @@ function ControlButton({
         aria-label={label}
         aria-pressed={pressed !== undefined ? pressed : active}
         className={[
+          // 44px is the smallest reliably tappable target; the bar keeps it
+          // even at the narrowest phone width rather than shrinking buttons.
           'relative flex h-11 w-11 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12',
           'disabled:cursor-not-allowed disabled:opacity-40',
-          danger
-            ? 'bg-danger-600 text-white hover:bg-danger-500'
-            : active
-              ? 'bg-brand-600 text-white hover:bg-brand-500'
-              : 'bg-white/10 text-ink-100 hover:bg-white/20',
+          locked
+            ? 'bg-warning-500/20 text-warning-300 ring-1 ring-warning-500/40'
+            : danger
+              ? 'bg-danger-600 text-white hover:bg-danger-500'
+              : active
+                ? 'bg-brand-600 text-white hover:bg-brand-500'
+                : 'bg-white/10 text-ink-100 hover:bg-white/20',
         ].join(' ')}
       >
         {icon}
+
+        {locked && (
+          <span
+            className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-warning-500 text-ink-950"
+            aria-hidden="true"
+          >
+            <Lock className="h-2.5 w-2.5" />
+          </span>
+        )}
 
         {badge !== undefined && badge > 0 && (
           <span
@@ -378,6 +430,9 @@ function MoreMenu({
   onOpenWhiteboard,
   onOpenAnnounce,
   onOpenBlocklist,
+  onOpenTodos,
+  onOpenRecordings,
+  locks,
   onToggleFocus,
   onPictureInPicture,
 }: {
@@ -403,6 +458,9 @@ function MoreMenu({
   onOpenWhiteboard: () => void;
   onOpenAnnounce: () => void;
   onOpenBlocklist: () => void;
+  onOpenTodos: () => void;
+  onOpenRecordings: () => void;
+  locks: { micLocked: boolean; cameraLocked: boolean };
   onToggleFocus: () => void;
   onPictureInPicture: () => void;
 }) {
@@ -432,7 +490,9 @@ function MoreMenu({
       ref={ref}
       role="menu"
       aria-label="More options"
-      className="absolute bottom-full right-2 mb-3 w-64 animate-[fade-in_0.15s_ease-out] rounded-2xl border border-white/10 bg-ink-850 p-2 shadow-2xl sm:right-4"
+      // The menu has grown past a phone's height; capping it and letting it
+      // scroll keeps the last items reachable instead of off the top.
+      className="absolute bottom-full right-2 mb-3 max-h-[70dvh] w-64 animate-[fade-in_0.15s_ease-out] overflow-y-auto overscroll-contain scrollbar-slim rounded-2xl border border-white/10 bg-ink-850 p-2 shadow-2xl sm:right-4"
     >
       {/* These three are on the bar itself at desktop widths. */}
       <div className="sm:hidden">
@@ -558,6 +618,20 @@ function MoreMenu({
         Quiz
       </button>
 
+      {/* Everyone can read the task list; only hosts can change it. */}
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        onClick={() => {
+          onOpenTodos();
+          onClose();
+        }}
+      >
+        <ListTodo className="h-4 w-4" />
+        Tasks
+      </button>
+
       <button
         type="button"
         role="menuitem"
@@ -638,12 +712,63 @@ function MoreMenu({
             role="menuitem"
             className={item}
             onClick={() => {
+              onOpenRecordings();
+              onClose();
+            }}
+          >
+            <Circle className="h-4 w-4" />
+            Recordings
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
               onOpenBlocklist();
               onClose();
             }}
           >
             <ShieldBan className="h-4 w-4" />
             Blocked participants
+          </button>
+
+          <div className="my-1.5 h-px bg-white/10" />
+
+          {/*
+           * Meeting-wide locks.
+           *
+           * These stay on until the host turns them off, which is what
+           * separates them from muting everyone once — a locked participant
+           * cannot simply unmute again a second later. The menu stays open so
+           * a host can set both without reopening it.
+           */}
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => void meetingClient.setMediaLock('mic', !locks.micLocked)}
+          >
+            {locks.micLocked ? (
+              <LockOpen className="h-4 w-4 text-warning-400" />
+            ) : (
+              <Lock className="h-4 w-4" />
+            )}
+            {locks.micLocked ? 'Unlock microphones' : 'Lock microphones'}
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => void meetingClient.setMediaLock('camera', !locks.cameraLocked)}
+          >
+            {locks.cameraLocked ? (
+              <LockOpen className="h-4 w-4 text-warning-400" />
+            ) : (
+              <Lock className="h-4 w-4" />
+            )}
+            {locks.cameraLocked ? 'Unlock cameras' : 'Lock cameras'}
           </button>
         </>
       )}

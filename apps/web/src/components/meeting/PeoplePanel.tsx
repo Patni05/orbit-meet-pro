@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Star,
   ShieldMinus,
+  UserCheck,
   UserMinus,
   Video,
   VideoOff,
@@ -328,6 +329,22 @@ function PersonRow({
         )}
         {!person.cameraEnabled && <VideoOff className="h-4 w-4" role="img" aria-label="Camera off" />}
 
+        {/* Only the states a host can act on are worth a glyph in the row. */}
+        {person.presenceCheck === 'CONFIRMED' && (
+          <UserCheck
+            className="h-4 w-4 text-success-400"
+            role="img"
+            aria-label="Confirmed they are here"
+          />
+        )}
+        {person.presenceCheck === 'REQUESTED' && (
+          <UserCheck
+            className="h-4 w-4 text-warning-400"
+            role="img"
+            aria-label="Presence check waiting for an answer"
+          />
+        )}
+
         {(canModerate || canChangeRole) && (
           <div className="relative">
             <button
@@ -373,6 +390,38 @@ function PersonRow({
                     >
                       <Volume2 className="h-4 w-4" />
                       Ask to unmute
+                    </button>
+
+                    {/*
+                     * A presence check can only be sent to somebody who has
+                     * agreed to receive them. Offering it against a person who
+                     * said no — or who has not been asked — would be offering
+                     * something the server is going to refuse, so the entry
+                     * explains its own state instead.
+                     */}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={item}
+                      disabled={person.presenceCheck !== 'ALLOWED'}
+                      title={
+                        person.presenceCheck === 'ALLOWED'
+                          ? undefined
+                          : person.presenceCheck === 'DENIED'
+                            ? `${person.name} has not agreed to presence checks.`
+                            : person.presenceCheck === 'REQUESTED'
+                              ? 'A check is already waiting for an answer.'
+                              : person.presenceCheck === 'CONFIRMED'
+                                ? `${person.name} has confirmed they are here.`
+                                : `${person.name} has not answered the consent question yet.`
+                      }
+                      onClick={() => {
+                        void meetingClient.requestPresence(person.identity);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      Check they are here
                     </button>
 
                     <button

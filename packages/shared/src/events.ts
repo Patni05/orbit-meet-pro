@@ -121,6 +121,8 @@ export interface ServerEvents {
   'locks:updated': (payload: { locks: MediaLocks; by: string }) => void;
 
   'todos:updated': (payload: { todos: TodoPayload[] }) => void;
+  /** Who may change the task list changed. Sent to the whole room. */
+  'todos:permission': (payload: { cohostsManageTodos: boolean }) => void;
 
   'recording:ready': (payload: { recording: RecordingPayload }) => void;
   /** Host-only: the recording list changed. */

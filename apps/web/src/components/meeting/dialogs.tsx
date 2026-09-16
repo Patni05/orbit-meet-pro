@@ -19,13 +19,21 @@ import { meetingClient } from '@/lib/meeting-client';
 export function LeaveDialog({
   open,
   onClose,
-  isHost,
+  canEndForEveryone,
   onLeave,
   onEndForEveryone,
 }: {
   open: boolean;
   onClose: () => void;
-  isHost: boolean;
+  /**
+   * Whether this person may close the room on everybody.
+   *
+   * Not the same as being a host: a co-host moderates, but ending the meeting
+   * stays with the owner while the meeting is set to host-only exit. The
+   * gateway refuses the attempt regardless, so hiding the button here is a
+   * courtesy rather than the control.
+   */
+  canEndForEveryone: boolean;
   onLeave: () => void;
   onEndForEveryone: () => void;
 }) {
@@ -35,9 +43,9 @@ export function LeaveDialog({
     <Modal
       open={open}
       onClose={onClose}
-      title={isHost ? 'Leave or end the meeting?' : 'Leave the meeting?'}
+      title={canEndForEveryone ? 'Leave or end the meeting?' : 'Leave the meeting?'}
       description={
-        isHost
+        canEndForEveryone
           ? 'You can step out and let the meeting continue, or close it for everyone.'
           : 'You can rejoin with the same link while the meeting is running.'
       }
@@ -58,7 +66,7 @@ export function LeaveDialog({
           Leave the meeting
         </Button>
 
-        {isHost && (
+        {canEndForEveryone && (
           <Button
             variant="danger"
             fullWidth

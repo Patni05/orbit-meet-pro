@@ -46,6 +46,31 @@ export function ChatPanel() {
     pinnedToBottom.current = distanceFromBottom < 80;
   }
 
+  /**
+   * Keep the newest message in view as the keyboard opens.
+   *
+   * The panel gets shorter the moment the keyboard appears, which silently
+   * scrolls the last few messages out of sight just as the user starts
+   * replying to them. `visualViewport` is what reports that change — a window
+   * resize event never fires for the keyboard on either mobile platform.
+   */
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    function onViewportChange() {
+      const list = listRef.current;
+      if (!list || !pinnedToBottom.current) return;
+      // After the browser has settled the new layout, not during it.
+      requestAnimationFrame(() => {
+        list.scrollTop = list.scrollHeight;
+      });
+    }
+
+    viewport.addEventListener('resize', onViewportChange);
+    return () => viewport.removeEventListener('resize', onViewportChange);
+  }, []);
+
   async function send(event?: FormEvent) {
     event?.preventDefault();
     const body = draft.trim();
@@ -82,7 +107,11 @@ export function ChatPanel() {
       <div
         ref={listRef}
         onScroll={onScroll}
-        className="flex-1 space-y-4 overflow-y-auto scrollbar-slim px-4 py-4"
+        /* `min-h-0` is load-bearing: a flex child defaults to `min-height:
+           auto`, so without it this list refuses to shrink below its own
+           content and pushes the composer out of the panel — which on a phone
+           put the input under the keyboard. */
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain scrollbar-slim px-3 py-4 sm:px-4"
         role="log"
         aria-label="Meeting chat"
         aria-live="polite"
@@ -125,7 +154,7 @@ export function ChatPanel() {
       </div>
 
       {chatEnabled ? (
-        <form onSubmit={send} className="relative border-t border-white/10 p-3">
+        <form onSubmit={send} className="relative shrink-0 border-t border-white/10 p-3">
           {emojiOpen && (
             <div className="absolute bottom-full left-3 mb-2 flex flex-wrap gap-1 rounded-xl border border-white/10 bg-ink-850 p-2 shadow-xl">
               {QUICK_EMOJI.map((emoji) => (
@@ -180,7 +209,7 @@ export function ChatPanel() {
               }}
               onKeyDown={onKeyDown}
               placeholder="Send a message"
-              className="max-h-30 min-h-10 flex-1 resize-none rounded-xl border border-white/15 bg-ink-850 px-3 py-2.5 text-sm text-ink-50 placeholder:text-ink-500 focus:outline-2 focus:outline-brand-500"
+              className="max-h-30 min-h-11 flex-1 resize-none rounded-xl border border-white/15 bg-ink-850 px-3 py-2.5 text-base text-ink-50 placeholder:text-ink-500 focus:outline-2 focus:outline-brand-500 sm:min-h-10 sm:text-sm"
             />
 
             <button

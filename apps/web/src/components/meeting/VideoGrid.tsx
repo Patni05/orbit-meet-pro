@@ -6,8 +6,32 @@ import { useTrackElement } from '@/hooks/useTrackElement';
 import { useRoomStore } from '@/lib/room-store';
 import { VideoTile } from './VideoTile';
 
-/** Beyond this many tiles the grid pages rather than shrinking further. */
-const PAGE_SIZE = 16;
+/**
+ * Beyond this many tiles the grid pages rather than shrinking further.
+ *
+ * A phone gets a smaller page on purpose. Sixteen tiles in two columns on a
+ * 360px screen is a 180px-wide slot per person — too small to recognise
+ * anyone, and sixteen decoded video streams the device has to keep up with.
+ * Six is the most that stays legible in portrait.
+ */
+const PAGE_SIZE_NARROW = 6;
+const PAGE_SIZE_WIDE = 16;
+
+/** Tracks a media query without re-rendering on every resize. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    setMatches(list.matches);
+
+    const onChange = (event: MediaQueryListEvent) => setMatches(event.matches);
+    list.addEventListener('change', onChange);
+    return () => list.removeEventListener('change', onChange);
+  }, [query]);
+
+  return matches;
+}
 
 /**
  * Participant layout.
@@ -29,13 +53,15 @@ export function VideoGrid() {
   const spotlight = useRoomStore((state) => state.spotlight);
 
   const [page, setPage] = useState(0);
+  const narrow = useMediaQuery('(max-width: 639px)');
+  const pageSize = narrow ? PAGE_SIZE_NARROW : PAGE_SIZE_WIDE;
 
   const visible = useMemo(
     () => order.filter((identity) => participants[identity]),
     [order, participants],
   );
 
-  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
 
   // Leaving participants can make the current page disappear.
   useEffect(() => {
@@ -102,7 +128,7 @@ export function VideoGrid() {
   }
 
   // -------------------------------------------------------------- grid view
-  const pageItems = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const pageItems = visible.slice(page * pageSize, (page + 1) * pageSize);
 
   return (
     <div className="flex h-full flex-col p-2 sm:p-3">

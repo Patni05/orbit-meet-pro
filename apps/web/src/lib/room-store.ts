@@ -4,15 +4,19 @@ import type {
   AnnouncementPayload,
   BlocklistEntry,
   ChatMessagePayload,
+  MediaLocks,
   MeetingSettings,
   MeetingSummary,
   ParticipantRole,
   PollPayload,
+  PresenceCheckState,
   QuizLiveView,
   QuizProgress,
   QuizResults,
   ReactionKey,
+  RecordingPayload,
   RoomParticipant,
+  TodoPayload,
   WaitingParticipant,
 } from '@orbit/shared';
 import type { ConnectionQuality, LocalTrackPublication, RemoteTrackPublication, Track } from 'livekit-client';
@@ -51,6 +55,8 @@ export type PanelId =
   | 'blocklist'
   | 'quiz'
   | 'whiteboard'
+  | 'todos'
+  | 'recordings'
   | null;
 
 export interface TrackBundle {
@@ -115,6 +121,32 @@ interface RoomState {
   handRaised: boolean;
 
   recording: { active: boolean; startedAt: string | null };
+  /** Finished and in-progress recordings. Host-only; empty for everyone else. */
+  recordings: RecordingPayload[];
+
+  /**
+   * Meeting-wide media locks.
+   *
+   * Mirrored here so the control can be shown as locked, which is a courtesy
+   * only — the gateway refuses a locked participant's `media:update` whatever
+   * this says.
+   */
+  locks: MediaLocks;
+
+  /** The shared task list. Everyone sees it; only hosts may change it. */
+  todos: TodoPayload[];
+  /** Whether co-hosts may change the task list. The host alone sets this. */
+  cohostsManageTodos: boolean;
+  /** Tasks added since the panel was last looked at. */
+  unreadTodos: number;
+
+  /** This participant's own presence-check consent and state. */
+  presenceCheck: PresenceCheckState;
+  /** An outstanding presence prompt for this participant, if any. */
+  presenceRequest: { by: string; expiresAt: string } | null;
+
+  /** When true, only the host may end the meeting for everyone. */
+  hostOnlyExit: boolean;
 
   /** Identities the host promoted for everyone. Distinct from a personal pin. */
   spotlight: string[];
@@ -163,6 +195,12 @@ interface RoomState {
     spotlight?: string[];
     announcement?: AnnouncementPayload | null;
     polls?: PollPayload[];
+    locks?: MediaLocks;
+    todos?: TodoPayload[];
+    cohostsManageTodos?: boolean;
+    recordings?: RecordingPayload[];
+    presenceCheck?: PresenceCheckState;
+    hostOnlyExit?: boolean;
     serverTime: string;
   }) => void;
   upsertParticipant: (participant: RoomParticipant) => void;
@@ -177,6 +215,12 @@ interface RoomState {
   setSettings: (settings: MeetingSettings, locked: boolean) => void;
   setLocked: (locked: boolean) => void;
   setRecording: (active: boolean, startedAt: string | null) => void;
+  setRecordings: (recordings: RecordingPayload[]) => void;
+  setLocks: (locks: MediaLocks) => void;
+  setTodos: (todos: TodoPayload[]) => void;
+  setCohostsManageTodos: (allow: boolean) => void;
+  setPresenceCheck: (state: PresenceCheckState) => void;
+  setPresenceRequest: (request: { by: string; expiresAt: string } | null) => void;
   setSpotlight: (identities: string[]) => void;
   setAnnouncement: (announcement: AnnouncementPayload | null) => void;
   upsertPoll: (poll: PollPayload) => void;
@@ -232,6 +276,14 @@ const initial = {
   blurEnabled: false,
   handRaised: false,
   recording: { active: false, startedAt: null as string | null },
+  recordings: [] as RecordingPayload[],
+  locks: { micLocked: false, cameraLocked: false } as MediaLocks,
+  todos: [] as TodoPayload[],
+  cohostsManageTodos: false,
+  unreadTodos: 0,
+  presenceCheck: 'NOT_ASKED' as PresenceCheckState,
+  presenceRequest: null as { by: string; expiresAt: string } | null,
+  hostOnlyExit: true,
   spotlight: [] as string[],
   announcement: null as AnnouncementPayload | null,
   polls: [] as PollPayload[],
@@ -293,6 +345,16 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       spotlight: payload.spotlight ?? [],
       announcement: payload.announcement ?? null,
       polls: payload.polls ?? [],
+      locks: payload.locks ?? { micLocked: false, cameraLocked: false },
+      todos: payload.todos ?? [],
+      cohostsManageTodos: payload.cohostsManageTodos ?? false,
+      // The server only fills this for a host; for anyone else it is an empty
+      // list because they are not allowed to know what was recorded.
+      recordings: payload.recordings ?? [],
+      presenceCheck: payload.presenceCheck ?? 'NOT_ASKED',
+      // Defaulting to true matters: if an older server omits the field, the
+      // safer reading is that ending the meeting is restricted, not open.
+      hostOnlyExit: payload.hostOnlyExit ?? true,
       handRaised: Boolean(payload.self.handRaisedAt),
       presenter,
       layout: presenter ? 'speaker' : state.layout,
@@ -410,6 +472,48 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     set({ recording: { active, startedAt } });
   },
 
+  setRecordings(recordings) {
+    set({ recordings });
+  },
+
+  setLocks(locks) {
+    set({ locks });
+  },
+
+  /**
+   * Replaces the list wholesale.
+   *
+   * The server is the only writer and always sends the complete, ordered set,
+   * so merging locally would only create a way for two clients to disagree
+   * about the order of a list they can both reorder.
+   */
+  setTodos(todos) {
+    set((state) => {
+      const added = Math.max(0, todos.length - state.todos.length);
+      return {
+        todos,
+        unreadTodos: state.panel === 'todos' ? 0 : state.unreadTodos + added,
+      };
+    });
+  },
+
+  setCohostsManageTodos(cohostsManageTodos) {
+    set({ cohostsManageTodos });
+  },
+
+  setPresenceCheck(presenceCheck) {
+    // Answering a prompt, in either direction, retires it.
+    set((state) => ({
+      presenceCheck,
+      presenceRequest:
+        presenceCheck === 'CONFIRMED' || presenceCheck === 'EXPIRED' ? null : state.presenceRequest,
+    }));
+  },
+
+  setPresenceRequest(presenceRequest) {
+    set({ presenceRequest });
+  },
+
   setSpotlight(identities) {
     set({ spotlight: identities });
   },
@@ -519,6 +623,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       panel,
       unreadCount: panel === 'chat' ? 0 : state.unreadCount,
       unreadPolls: panel === 'polls' ? 0 : state.unreadPolls,
+      unreadTodos: panel === 'todos' ? 0 : state.unreadTodos,
     }));
   },
 
@@ -556,6 +661,26 @@ export const selectIsSpeaking = (identity: string) => (state: RoomState) => Bool
 
 export const selectIsHost = (state: RoomState): boolean =>
   state.selfRole === 'HOST' || state.selfRole === 'COHOST';
+
+/**
+ * Strictly the host, excluding co-hosts.
+ *
+ * Ending the meeting for everyone and changing who may end it are the host's
+ * alone, so they cannot be answered with `selectIsHost`.
+ */
+export const selectIsOwner = (state: RoomState): boolean => state.selfRole === 'HOST';
+
+/**
+ * Whether a lock currently applies to this participant.
+ *
+ * Hosts and co-hosts are exempt, matching the gateway — which is the copy
+ * that decides. This one only decides whether to grey out a button.
+ */
+export const selectMicLockedForMe = (state: RoomState): boolean =>
+  state.locks.micLocked && !selectIsHost(state);
+
+export const selectCameraLockedForMe = (state: RoomState): boolean =>
+  state.locks.cameraLocked && !selectIsHost(state);
 
 /** Raised hands, oldest first — the order they should be called on. */
 /**

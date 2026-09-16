@@ -151,6 +151,19 @@
     padding-right: env(safe-area-inset-right);
   }
 
+  /*
+   * The real, keyboard-aware viewport height.
+   *
+   * `--app-height` is published by useViewportHeight from `visualViewport`.
+   * The `100dvh` fallback is what browsers without that API get, and is also
+   * what renders on the server, so the shell is never zero-height before
+   * hydration.
+   */
+  .app-height {
+    height: 100dvh;
+    height: var(--app-height, 100dvh);
+  }
+
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -195,29 +208,44 @@
  * main thread and a burst of reactions costs almost nothing. `--drift` is set
  * per reaction so each one curves slightly differently on the way up.
  */
+/**
+ * `--rise` is the measured height of the reaction layer, set per reaction by
+ * ReactionOverlay. The travel used to be a fixed 230px inside a 288px strip,
+ * so on any screen taller than that a reaction faded out a third of the way
+ * up. Driving the distance from the layer's real height is what makes the
+ * reaction actually reach the top, on a phone and on a monitor alike.
+ */
 @keyframes reaction-rise {
   0% {
     opacity: 0;
     transform: translate3d(0, 24px, 0) scale(0.6);
   }
-  12% {
+  8% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1.08);
+    transform: translate3d(0, 0, 0) scale(1.1);
   }
-  22% {
-    transform: translate3d(0, -12px, 0) scale(1);
+  16% {
+    transform: translate3d(calc(var(--drift, 0px) * 0.15), calc(var(--rise, 240px) * -0.1), 0)
+      scale(1);
   }
-  70% {
+  55% {
+    opacity: 1;
+    transform: translate3d(calc(var(--drift, 0px) * 0.6), calc(var(--rise, 240px) * -0.5), 0)
+      scale(1);
+  }
+  88% {
     opacity: 1;
   }
   100% {
     opacity: 0;
-    transform: translate3d(var(--drift, 0px), -230px, 0) scale(0.85);
+    /* The extra 16px clears the emoji's own height at the top edge, so it
+       leaves the screen rather than stopping short of it. */
+    transform: translate3d(var(--drift, 0px), calc((var(--rise, 240px) + 16px) * -1), 0) scale(0.9);
   }
 }
 
 .animate-reaction-rise {
-  animation: reaction-rise 3.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: reaction-rise 4.2s cubic-bezier(0.33, 0.7, 0.4, 1) forwards;
   /* Promotes the element to its own layer for the duration of the rise. */
   will-change: transform, opacity;
 }

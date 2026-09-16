@@ -57,6 +57,10 @@ export function toRoomParticipant(p: MeetingParticipant): RoomParticipant {
     cameraEnabled: p.cameraEnabled,
     screenSharing: p.screenSharing,
     connected: p.connected,
+    // Carries only this participant's own consent state — never a camera
+    // frame, a device name or anything else about them. It exists so a host
+    // can see who has agreed to be checked before asking.
+    presenceCheck: p.presenceCheck as RoomParticipant['presenceCheck'],
   };
 }
 

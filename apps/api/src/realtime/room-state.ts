@@ -97,6 +97,7 @@ export async function buildRoomState(
     },
     locks: { micLocked: meeting.micLocked, cameraLocked: meeting.cameraLocked },
     todos,
+    cohostsManageTodos: meeting.cohostsManageTodos,
     // Recordings are the host's: a participant's payload simply does not
     // contain them, so there is no id to guess at.
     recordings: isHostLike ? recordings : [],

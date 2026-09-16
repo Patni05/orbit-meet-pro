@@ -69,13 +69,25 @@ export const VideoTile = memo(function VideoTile({
           className={`h-full w-full object-cover ${isLocal ? 'scale-x-[-1]' : ''}`}
         />
       ) : (
-        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-ink-850 to-ink-900">
-          <Avatar
-            name={participant.name}
-            src={participant.avatarUrl}
-            seed={participant.identity}
-            size={compact ? 'md' : variant === 'stage' ? 'xl' : 'lg'}
-          />
+        <div className="@container flex h-full w-full items-center justify-center bg-gradient-to-br from-ink-850 to-ink-900">
+          {/* Sized as a share of the tile rather than from a fixed scale, so
+              the avatar is equally readable in a two-person call and a
+              twelve-person grid. The caps stop it dominating a wide stage or
+              vanishing in a filmstrip thumbnail. */}
+          <div
+            className={
+              compact
+                ? 'aspect-square w-[52%] max-w-24'
+                : 'aspect-square w-[44%] max-w-56 min-w-16 sm:w-[40%]'
+            }
+          >
+            <Avatar
+              name={participant.name}
+              src={participant.avatarUrl}
+              seed={participant.identity}
+              fill
+            />
+          </div>
         </div>
       )}
 
