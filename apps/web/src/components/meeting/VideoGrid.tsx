@@ -26,6 +26,7 @@ export function VideoGrid() {
   const pinned = useRoomStore((state) => state.pinned);
   const presenter = useRoomStore((state) => state.presenter);
   const activeSpeaker = useRoomStore((state) => state.activeSpeaker);
+  const spotlight = useRoomStore((state) => state.spotlight);
 
   const [page, setPage] = useState(0);
 
@@ -55,6 +56,34 @@ export function VideoGrid() {
   // ------------------------------------------------------------ presentation
   if (presenter && participants[presenter]) {
     return <PresentationLayout presenterIdentity={presenter} others={visible} selfIdentity={selfIdentity} />;
+  }
+
+  // ------------------------------------------------------------- spotlight
+  // A host spotlighting someone is an instruction to the whole room, so it
+  // outranks both the automatic active speaker and a personal layout choice.
+  // A presentation still wins, because that is what a presenter asked for.
+  const spotlighted = spotlight.filter((identity) => participants[identity]);
+  if (spotlighted.length > 0) {
+    const others = visible.filter((identity) => !spotlighted.includes(identity));
+    return (
+      <div className="flex h-full flex-col gap-2 p-2 sm:gap-3 sm:p-3">
+        <div
+          className={`grid min-h-0 flex-1 gap-2 sm:gap-3 ${
+            spotlighted.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
+          }`}
+        >
+          {spotlighted.map((identity) => (
+            <VideoTile
+              key={identity}
+              identity={identity}
+              variant="stage"
+              isLocal={identity === selfIdentity}
+            />
+          ))}
+        </div>
+        <Filmstrip identities={others} selfIdentity={selfIdentity} />
+      </div>
+    );
   }
 
   // ------------------------------------------------------------ speaker view

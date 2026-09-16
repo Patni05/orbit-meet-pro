@@ -1,10 +1,13 @@
 'use client';
 
 import type {
+  AnnouncementPayload,
+  BlocklistEntry,
   ChatMessagePayload,
   MeetingSettings,
   MeetingSummary,
   ParticipantRole,
+  PollPayload,
   ReactionKey,
   RoomParticipant,
   WaitingParticipant,
@@ -36,7 +39,7 @@ export type ConnectionPhase =
   | 'error';
 
 export type LayoutMode = 'grid' | 'speaker';
-export type PanelId = 'chat' | 'people' | 'info' | 'diagnostics' | null;
+export type PanelId = 'chat' | 'people' | 'info' | 'diagnostics' | 'polls' | 'blocklist' | null;
 
 export interface TrackBundle {
   camera?: Track;
@@ -101,6 +104,16 @@ interface RoomState {
 
   recording: { active: boolean; startedAt: string | null };
 
+  /** Identities the host promoted for everyone. Distinct from a personal pin. */
+  spotlight: string[];
+  /** Newest announcement banner, or null when there is none. */
+  announcement: AnnouncementPayload | null;
+  polls: PollPayload[];
+  /** Host-only; empty for everyone else because the server never sends it. */
+  blocklist: BlocklistEntry[];
+  /** Polls opened since the panel was last looked at. */
+  unreadPolls: number;
+
   activeSpeaker: string | null;
   presenter: string | null;
 
@@ -125,6 +138,9 @@ interface RoomState {
     waiting: WaitingParticipant[];
     messages: ChatMessagePayload[];
     recording: { active: boolean; startedAt: string | null };
+    spotlight?: string[];
+    announcement?: AnnouncementPayload | null;
+    polls?: PollPayload[];
     serverTime: string;
   }) => void;
   upsertParticipant: (participant: RoomParticipant) => void;
@@ -139,6 +155,10 @@ interface RoomState {
   setSettings: (settings: MeetingSettings, locked: boolean) => void;
   setLocked: (locked: boolean) => void;
   setRecording: (active: boolean, startedAt: string | null) => void;
+  setSpotlight: (identities: string[]) => void;
+  setAnnouncement: (announcement: AnnouncementPayload | null) => void;
+  upsertPoll: (poll: PollPayload) => void;
+  setBlocklist: (entries: BlocklistEntry[]) => void;
   setLocalMedia: (patch: { mic?: boolean; camera?: boolean; screen?: boolean; blur?: boolean }) => void;
   setHandRaised: (raised: boolean) => void;
   setSelfRole: (role: ParticipantRole) => void;
@@ -185,6 +205,11 @@ const initial = {
   blurEnabled: false,
   handRaised: false,
   recording: { active: false, startedAt: null as string | null },
+  spotlight: [] as string[],
+  announcement: null as AnnouncementPayload | null,
+  polls: [] as PollPayload[],
+  blocklist: [] as BlocklistEntry[],
+  unreadPolls: 0,
   activeSpeaker: null,
   presenter: null,
   layout: 'grid' as LayoutMode,
@@ -233,6 +258,9 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       // Rejoining should not resurrect an old unread badge.
       unreadCount: state.panel === 'chat' ? 0 : state.unreadCount,
       recording: payload.recording,
+      spotlight: payload.spotlight ?? [],
+      announcement: payload.announcement ?? null,
+      polls: payload.polls ?? [],
       handRaised: Boolean(payload.self.handRaisedAt),
       presenter,
       layout: presenter ? 'speaker' : state.layout,
@@ -350,6 +378,39 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     set({ recording: { active, startedAt } });
   },
 
+  setSpotlight(identities) {
+    set({ spotlight: identities });
+  },
+
+  setAnnouncement(announcement) {
+    set({ announcement });
+  },
+
+  /**
+   * Polls arrive per viewer and can update on every vote, so the list is keyed
+   * by id and replaced in place. Newest first, matching how the server sends
+   * them, so an opening poll appears at the top rather than below old results.
+   */
+  upsertPoll(poll) {
+    set((state) => {
+      const existing = state.polls.findIndex((p) => p.id === poll.id);
+      const polls =
+        existing >= 0
+          ? state.polls.map((p, index) => (index === existing ? poll : p))
+          : [poll, ...state.polls];
+
+      const isNew = existing < 0 && poll.status === 'OPEN';
+      return {
+        polls,
+        unreadPolls: isNew && state.panel !== 'polls' ? state.unreadPolls + 1 : state.unreadPolls,
+      };
+    });
+  },
+
+  setBlocklist(entries) {
+    set({ blocklist: entries });
+  },
+
   setLocalMedia(patch) {
     set((state) => ({
       micEnabled: patch.mic ?? state.micEnabled,
@@ -396,6 +457,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     set((state) => ({
       panel,
       unreadCount: panel === 'chat' ? 0 : state.unreadCount,
+      unreadPolls: panel === 'polls' ? 0 : state.unreadPolls,
     }));
   },
 

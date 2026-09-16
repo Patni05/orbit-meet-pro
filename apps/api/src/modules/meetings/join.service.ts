@@ -1,5 +1,6 @@
 import type { MeetingParticipant, User } from '@prisma/client';
 import { isPrivateOrigin } from '../../lib/net';
+import { isBlocked } from './blocklist.service';
 import {
   ERROR_CODES,
   type JoinOutcome,
@@ -217,6 +218,23 @@ export async function joinMeeting(request: JoinRequest): Promise<JoinOutcome> {
 
   if (existing?.status === 'REMOVED') {
     return { outcome: 'REJECTED', reason: 'You were removed from this meeting by the host.' };
+  }
+
+  /**
+   * Blocked people are turned away here, before a LiveKit token exists.
+   *
+   * Checking later — at the waiting room, or when the socket connects — would
+   * still have minted SFU credentials for someone the host has barred, and a
+   * token is all it takes to reach the media server directly.
+   */
+  if (
+    await isBlocked({
+      meetingId: meeting.id,
+      userId: user?.id ?? null,
+      identity: existing?.identity ?? null,
+    })
+  ) {
+    return { outcome: 'REJECTED', reason: 'You can no longer join this meeting.' };
   }
 
   const role = await resolveRole(meeting, user?.id ?? null);

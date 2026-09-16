@@ -7,7 +7,9 @@ import {
   MicOff,
   MoreHorizontal,
   ScreenShareOff,
+  ShieldBan,
   ShieldCheck,
+  Star,
   ShieldMinus,
   UserMinus,
   Video,
@@ -176,6 +178,7 @@ function PersonRow({
   canChangeRole: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const spotlighted = useRoomStore((state) => state.spotlight.includes(person.identity));
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -311,6 +314,21 @@ function PersonRow({
                       </button>
                     )}
 
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={item}
+                      onClick={() => {
+                        void meetingClient.setSpotlight(person.identity, !spotlighted);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <Star
+                        className={`h-4 w-4 ${spotlighted ? 'fill-warning-400 text-warning-400' : ''}`}
+                      />
+                      {spotlighted ? 'Remove spotlight' : 'Spotlight for everyone'}
+                    </button>
+
                     {person.handRaisedAt && (
                       <button
                         type="button"
@@ -372,6 +390,18 @@ function PersonRow({
                     >
                       <UserMinus className="h-4 w-4" />
                       Remove from meeting
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`${item} text-danger-400 hover:bg-danger-500/15`}
+                      onClick={() => {
+                        void meetingClient.blockParticipant(person.identity);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <ShieldBan className="h-4 w-4" />
+                      Block from this meeting
                     </button>
                   </>
                 )}

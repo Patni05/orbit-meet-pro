@@ -73,6 +73,10 @@ model User {
   meetingEvents       MeetingEvent[]
 
   @@index([lastActiveAt])
+  blockedEntries      MeetingBlocklistEntry[] @relation("BlockedUser")
+  blocksIssued        MeetingBlocklistEntry[] @relation("BlockedByUser")
+  announcements       MeetingAnnouncement[]
+  pollsCreated        Poll[]
 }
 
 /// Rotating refresh tokens. Only the SHA-256 hash of the token is stored.
@@ -139,6 +143,10 @@ model Meeting {
   muteOnEntry          Boolean         @default(false)
   recordingEnabled     Boolean         @default(false)
 
+  /// Identities the host has spotlighted for everyone. Distinct from a
+  /// personal pin, which is a viewer-only preference and never stored.
+  spotlightIdentities String[] @default([])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -148,6 +156,9 @@ model Meeting {
   messages     ChatMessage[]
   recordings   Recording[]
   events       MeetingEvent[]
+  blocklist    MeetingBlocklistEntry[]
+  announcements MeetingAnnouncement[]
+  polls        Poll[]
 
   @@index([hostId, status])
   @@index([scheduledAt])
@@ -185,6 +196,7 @@ model MeetingParticipant {
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  pollVotes PollVote[]
 
   @@unique([meetingId, identity])
   @@index([meetingId, status])
@@ -260,4 +272,131 @@ model MeetingEvent {
 
   @@index([meetingId, createdAt])
   @@index([type])
+}
+
+// ---------------------------------------------------------------------------
+// Moderation, announcements and live polling
+// ---------------------------------------------------------------------------
+
+/// Why a participant was blocked, kept for the host's own audit trail.
+enum BlockScope {
+  /// Identified by their signed-in account: survives new sessions and devices.
+  USER
+  /// Identified by the meeting-scoped guest identity, which is all an
+  /// anonymous participant has. Weaker, but never a device fingerprint.
+  GUEST_IDENTITY
+}
+
+/// A participant barred from re-entering one meeting.
+///
+/// Scoped to the meeting rather than global: being removed from one call says
+/// nothing about any other. Blocking a signed-in user is durable because the
+/// account is durable; a guest can only be matched on their meeting identity,
+/// which is the strongest handle available without fingerprinting the device.
+model MeetingBlocklistEntry {
+  id        String     @id @default(uuid())
+  meetingId String
+  scope     BlockScope
+
+  /// Set when scope is USER.
+  userId    String?
+  /// Set when scope is GUEST_IDENTITY.
+  identity  String?
+
+  /// Kept only so the host can recognise the entry in the management panel.
+  displayName String
+  reason      String?
+
+  blockedById String
+  createdAt   DateTime @default(now())
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user      User?   @relation("BlockedUser", fields: [userId], references: [id], onDelete: Cascade)
+  blockedBy User    @relation("BlockedByUser", fields: [blockedById], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
+  @@unique([meetingId, identity])
+  @@index([meetingId])
+}
+
+/// A short message a host pushes to everyone in the meeting.
+model MeetingAnnouncement {
+  id        String   @id @default(uuid())
+  meetingId String
+  body      String
+  createdById String
+  createdAt DateTime @default(now())
+  /// Cleared by the host, or superseded by a newer announcement.
+  dismissedAt DateTime?
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([meetingId, createdAt])
+}
+
+enum PollStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+/// A live poll: opinions, no correct answer. Quizzes are a separate model
+/// because they need an answer key, scoring and ranking.
+model Poll {
+  id        String     @id @default(uuid())
+  meetingId String
+  question  String
+  status    PollStatus @default(DRAFT)
+
+  /// Multiple selections allowed per voter.
+  multiSelect Boolean @default(false)
+  /// Voter identity is not stored against the vote.
+  anonymous   Boolean @default(false)
+  /// Hide the tally from participants until the poll closes.
+  hideResultsUntilClosed Boolean @default(true)
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  openedAt    DateTime?
+  closedAt    DateTime?
+
+  meeting   Meeting      @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  createdBy User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  options   PollOption[]
+  votes     PollVote[]
+
+  @@index([meetingId, status])
+}
+
+model PollOption {
+  id     String @id @default(uuid())
+  pollId String
+  label  String
+  /// Display order, so options do not shuffle between renders.
+  position Int
+
+  poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes PollVote[]
+
+  @@index([pollId, position])
+}
+
+model PollVote {
+  id       String @id @default(uuid())
+  pollId   String
+  optionId String
+  /// The participant row, not the user: guests vote too.
+  participantId String
+
+  createdAt DateTime @default(now())
+
+  poll   Poll               @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option PollOption         @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  participant MeetingParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  /// One vote per option per participant; multi-select adds rows, never
+  /// duplicates, and a re-vote replaces rather than stacking.
+  @@unique([pollId, participantId, optionId])
+  @@index([pollId])
 }

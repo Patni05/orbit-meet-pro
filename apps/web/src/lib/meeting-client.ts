@@ -24,6 +24,8 @@ import {
   REACTION_EMOJI,
   type ClientEvents,
   type JoinTicket,
+  type BlocklistEntry,
+  type PollPayload,
   type ReactionKey,
   type RoomParticipant,
   type ServerEvents,
@@ -325,6 +327,51 @@ class MeetingClient {
       this.store.notify(active ? 'warn' : 'info', active ? `${by} started recording` : `${by} stopped recording`);
     });
 
+    socket.on('spotlight:updated', ({ identities, by }) => {
+      this.store.setSpotlight(identities);
+      this.store.notify('info', identities.length > 0 ? `${by} changed the spotlight` : `${by} cleared the spotlight`);
+    });
+
+    socket.on('announcement:posted', (announcement) => {
+      this.store.setAnnouncement(announcement);
+    });
+
+    socket.on('announcement:cleared', () => {
+      this.store.setAnnouncement(null);
+    });
+
+    socket.on('blocklist:updated', ({ entries }) => {
+      this.store.setBlocklist(entries);
+    });
+
+    /**
+     * A block is final for this meeting, so the client tears down rather than
+     * retrying: leaving the socket to reconnect would just be refused, and the
+     * person deserves a clear explanation instead of a spinner.
+     */
+    socket.on('you:blocked', ({ by, reason }) => {
+      void this.teardown();
+      useRoomStore.setState({
+        phase: 'removed',
+        endedBy: by,
+        errorMessage: reason ? `You were blocked by ${by}: ${reason}` : `You were blocked by ${by}.`,
+      });
+    });
+
+    socket.on('poll:opened', (poll) => {
+      this.store.upsertPoll(poll);
+      this.store.notify('info', 'A poll has opened');
+    });
+
+    socket.on('poll:updated', (poll) => {
+      this.store.upsertPoll(poll);
+    });
+
+    socket.on('poll:closed', (poll) => {
+      this.store.upsertPoll(poll);
+      this.store.notify('info', 'The poll has closed');
+    });
+
     socket.on('meeting:ended', ({ by }) => {
       this.callbacks.onEnded?.(by);
       void this.teardown();
@@ -578,6 +625,33 @@ class MeetingClient {
     });
   }
 
+  /**
+   * Like `hostAction`, but hands back the server's payload.
+   *
+   * Used where the reply matters rather than just its success — a vote comes
+   * back with the poll as this viewer is allowed to see it, which is not
+   * something the client could reconstruct on its own.
+   */
+  private request<T>(
+    event: keyof ClientEvents,
+    payload: unknown,
+  ): Promise<{ ok: boolean; data?: T; message?: string }> {
+    return new Promise((resolve) => {
+      const socket = this.socket;
+      if (!socket) return resolve({ ok: false, message: 'Not connected.' });
+
+      const ack = (res: { ok: true; data: unknown } | { ok: false; code: string; message: string }) => {
+        if (res.ok) resolve({ ok: true, data: res.data as T });
+        else {
+          useRoomStore.getState().notify('error', res.message);
+          resolve({ ok: false, message: res.message });
+        }
+      };
+
+      (socket.emit as (e: string, p: unknown, a: typeof ack) => void)(event as string, payload, ack);
+    });
+  }
+
   muteParticipant = (identity: string, kind: 'audio' | 'video') =>
     this.hostAction('host:mute', { identity, kind });
   muteEveryone = (includeHosts = false) => this.hostAction('host:mute-all', { includeHosts });
@@ -595,6 +669,32 @@ class MeetingClient {
   reject = (participantId: string) => this.hostAction('host:reject', { participantId });
   endForEveryone = () => this.hostAction('host:end-meeting', {});
   setRecording = (action: 'start' | 'stop') => this.hostAction('host:recording', { action });
+  setSpotlight = (identity: string, on: boolean) => this.hostAction('host:spotlight', { identity, on });
+  announce = (body: string) => this.hostAction('host:announce', { body });
+  clearAnnouncement = (id: string) => this.hostAction('host:announce-clear', { id });
+  blockParticipant = (identity: string, reason?: string) =>
+    this.hostAction('host:block', { identity, reason });
+  unblock = (entryId: string) => this.hostAction('host:unblock', { entryId });
+
+  /** Loads the blocklist on demand; the server refuses this for non-hosts. */
+  async loadBlocklist(): Promise<void> {
+    const result = await this.request<BlocklistEntry[]>('host:blocklist', {});
+    if (result.ok && Array.isArray(result.data)) this.store.setBlocklist(result.data);
+  }
+
+  createPoll = (payload: {
+    question: string;
+    options: string[];
+    multiSelect?: boolean;
+    anonymous?: boolean;
+    hideResultsUntilClosed?: boolean;
+  }) => this.hostAction('host:poll-create', payload);
+
+  closePoll = (pollId: string) => this.hostAction('host:poll-close', { pollId });
+
+  /** Voting is open to everyone, so it is not a host action. */
+  vote = (pollId: string, optionIds: string[]) =>
+    this.request<PollPayload>('poll:vote', { pollId, optionIds });
 
   // ------------------------------------------------------------------- stats
 

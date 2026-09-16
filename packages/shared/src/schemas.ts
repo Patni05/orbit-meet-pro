@@ -113,3 +113,52 @@ export type CreateMeetingInput = z.infer<typeof createMeetingSchema>;
 export type UpdateMeetingInput = z.infer<typeof updateMeetingSchema>;
 export type JoinMeetingInput = z.infer<typeof joinMeetingSchema>;
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Moderation, announcements and polls
+// ---------------------------------------------------------------------------
+
+/**
+ * Every privileged payload is validated here before the server acts on it.
+ * Bounds are deliberately tight: an announcement is a banner rather than an
+ * essay, and a poll with two hundred options is an attempt to exhaust
+ * something rather than to ask a question.
+ */
+export const announcementSchema = z.object({
+  body: z
+    .string()
+    .trim()
+    .min(1, 'Write something to announce.')
+    .max(280, 'Keep announcements under 280 characters.'),
+});
+
+export const blockSchema = z.object({
+  identity: z.string().trim().min(1).max(128),
+  reason: z.string().trim().max(200).optional(),
+});
+
+export const spotlightSchema = z.object({
+  identity: z.string().trim().min(1).max(128),
+  on: z.boolean(),
+});
+
+export const pollCreateSchema = z.object({
+  question: z.string().trim().min(1, 'Ask a question.').max(300),
+  options: z
+    .array(z.string().trim().min(1, 'Options cannot be blank.').max(120))
+    .min(2, 'Give people at least two options.')
+    .max(10, 'Ten options is the maximum.'),
+  multiSelect: z.boolean().optional(),
+  anonymous: z.boolean().optional(),
+  hideResultsUntilClosed: z.boolean().optional(),
+});
+
+export const pollVoteSchema = z.object({
+  pollId: z.string().uuid(),
+  /**
+   * An empty array is a valid "clear my vote". The upper bound matches the
+   * maximum number of options a poll can have, so a caller cannot send a
+   * thousand ids and make the server do a thousand lookups.
+   */
+  optionIds: z.array(z.string().uuid()).max(10),
+});

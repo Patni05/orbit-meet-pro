@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, LogOut, Radio } from 'lucide-react';
+import { AlertTriangle, LogOut, Megaphone, Radio } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Alert, Button, Field, Select } from '@/components/ui/primitives';
@@ -276,6 +276,74 @@ export function RecordingDialog({
           <Radio className="h-4 w-4" />
           {active ? 'Stop recording' : 'Start recording'}
         </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Compose an announcement.
+ *
+ * Kept short by design — 280 characters, the same bound the server enforces.
+ * An announcement interrupts everyone at once, so the format nudges towards
+ * "starting in two minutes" rather than a paragraph nobody reads.
+ */
+export function AnnounceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send() {
+    const trimmed = body.trim();
+    if (!trimmed) return setError('Write something to announce.');
+
+    setBusy(true);
+    setError(null);
+    const result = await meetingClient.announce(trimmed);
+    setBusy(false);
+
+    if (result.ok) {
+      setBody('');
+      onClose();
+    } else {
+      setError(result.message ?? 'The announcement could not be sent.');
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Send an announcement"
+      description="Everyone sees this until you clear it."
+      size="sm"
+    >
+      <div className="space-y-3">
+        {error && <Alert tone="error">{error}</Alert>}
+
+        <label htmlFor="announcement-body" className="sr-only">
+          Announcement
+        </label>
+        <textarea
+          id="announcement-body"
+          rows={3}
+          value={body}
+          maxLength={280}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="Presentation begins in two minutes."
+          className="w-full resize-none rounded-xl border border-ink-200 bg-white px-3 py-2.5 text-sm focus:outline-2 focus:outline-brand-500 dark:border-white/15 dark:bg-ink-850 dark:text-ink-50"
+        />
+        <p className="text-right text-xs text-ink-500">{280 - body.length} characters left</p>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={() => void send()} loading={busy}>
+            <Megaphone className="h-4 w-4" />
+            Announce
+          </Button>
+        </div>
       </div>
     </Modal>
   );

@@ -35,7 +35,8 @@ meeting token already issued.
 | **Joining** | Guests join with just a name. Hosts can require sign-in, a passcode, or both. |
 | **Meetings** | Instant or scheduled, with a waiting room, a lock, and per-meeting policy. |
 | **In-call** | Camera, microphone, screen sharing, chat, reactions, raised hands, grid/speaker layouts. |
-| **Moderation** | Mute, remove, promote to co-host, end for everyone — all enforced server-side. |
+| **Moderation** | Mute, remove, co-host, spotlight, per-meeting blocklist, announcements — all re-authorized server-side. |
+| **Polls** | Live polls whose tallies are genuinely withheld on the wire until they close. |
 | **Resilience** | Reconnects restore your seat rather than cloning you into the roster. |
 | **Recording** | Optional, via LiveKit Egress, and never silent — every participant is told. |
 
@@ -319,3 +320,38 @@ with unlimited retries, as the pub/sub clients deliberately are.
 ## Licence
 
 MIT.
+
+---
+
+## Moderation model
+
+Every privileged action is a *request* to the server, which re-reads the
+caller's role from the database before acting. A hidden button is a
+convenience, never a boundary — `apps/api/scripts/test-moderation.mjs` sends
+host commands from a plain participant's socket specifically to prove they are
+refused.
+
+**Spotlight** promotes someone for the whole room, and outranks both the
+automatic active speaker and each viewer's personal pin. A presentation still
+wins, because that is what the presenter asked for.
+
+**Blocking** is scoped to one meeting. A signed-in account stays blocked across
+new sessions and devices; an anonymous guest can only be matched on the
+meeting-scoped identity issued at join time. That is a real limit, stated
+plainly: a guest who clears storage can return under a new identity. The
+alternative is device fingerprinting, which is invasive and defeated by any
+determined visitor anyway — a host who needs a firmer boundary should turn on
+*Require sign-in*.
+
+The block check runs in the join path **before a LiveKit token is minted**.
+Checking later would still have handed SFU credentials to someone the host
+barred, and a token alone is enough to reach the media server.
+
+**Polls** withhold their tally rather than merely hiding it. While a poll is
+open and the host chose to hide interim results, each option's `votes` is
+`null` in the payload itself, so there is no number in the frame for a curious
+participant to read. Hosts always see the running count.
+
+```bash
+node apps/api/scripts/test-moderation.mjs   # 36 checks, needs the API running
+```

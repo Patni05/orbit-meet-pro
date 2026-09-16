@@ -123,6 +123,12 @@ export interface RoomState {
   waiting: WaitingParticipant[];
   messages: ChatMessagePayload[];
   recording: { active: boolean; recordingId: string | null; startedAt: string | null };
+  /** Identities the host has spotlighted; everyone sees these promoted. */
+  spotlight: string[];
+  /** Newest undismissed announcement, if any. */
+  announcement: AnnouncementPayload | null;
+  /** Polls this viewer is allowed to see: open ones, plus closed ones. */
+  polls: PollPayload[];
   /** Server clock, so clients can compute meeting duration without trusting local time. */
   serverTime: string;
 }
@@ -185,4 +191,64 @@ export interface HealthReport {
     activeMeetings: number;
     connectedParticipants: number;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Moderation, announcements and polls
+// ---------------------------------------------------------------------------
+
+export type BlockScope = 'USER' | 'GUEST_IDENTITY';
+
+/**
+ * A blocked participant, as shown in the host's management panel.
+ *
+ * Deliberately carries no network information. A host needs to recognise who
+ * they blocked, not to be handed an address they never asked for.
+ */
+export interface BlocklistEntry {
+  id: string;
+  scope: BlockScope;
+  displayName: string;
+  reason: string | null;
+  createdAt: string;
+  /** Present only for signed-in accounts, and never shown to participants. */
+  userId: string | null;
+  identity: string | null;
+}
+
+export interface AnnouncementPayload {
+  id: string;
+  body: string;
+  byName: string;
+  createdAt: string;
+}
+
+export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED';
+
+export interface PollOptionPayload {
+  id: string;
+  label: string;
+  position: number;
+  /**
+   * Tally for this option. Withheld — left as null — while the poll is open
+   * and the host chose to hide interim results, so nobody can be nudged by a
+   * running total.
+   */
+  votes: number | null;
+}
+
+export interface PollPayload {
+  id: string;
+  question: string;
+  status: PollStatus;
+  multiSelect: boolean;
+  anonymous: boolean;
+  hideResultsUntilClosed: boolean;
+  options: PollOptionPayload[];
+  /** Total participants who have answered, always safe to show. */
+  responseCount: number;
+  /** This viewer's own selections. */
+  myOptionIds: string[];
+  createdAt: string;
+  closedAt: string | null;
 }

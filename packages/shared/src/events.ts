@@ -1,7 +1,10 @@
 import type {
+  AnnouncementPayload,
+  BlocklistEntry,
   ChatMessagePayload,
   MeetingSettings,
   ParticipantRole,
+  PollPayload,
   ReactionEvent,
   RoomParticipant,
   RoomState,
@@ -66,6 +69,21 @@ export interface ServerEvents {
   notice: (payload: { kind: 'info' | 'warn'; message: string }) => void;
   'you:removed': (payload: { by: string }) => void;
   'pong:rt': (payload: { serverTime: string }) => void;
+
+  /** The host changed who is spotlighted for everyone. */
+  'spotlight:updated': (payload: { identities: string[]; by: string }) => void;
+
+  'announcement:posted': (payload: AnnouncementPayload) => void;
+  'announcement:cleared': (payload: { id: string }) => void;
+
+  /** Delivered only to the person blocked, immediately before disconnection. */
+  'you:blocked': (payload: { by: string; reason: string | null }) => void;
+  /** Host-only: the blocklist changed. */
+  'blocklist:updated': (payload: { entries: BlocklistEntry[] }) => void;
+
+  'poll:opened': (poll: PollPayload) => void;
+  'poll:updated': (poll: PollPayload) => void;
+  'poll:closed': (poll: PollPayload) => void;
 }
 
 /** Acks report authorization failures instead of silently dropping the action. */
@@ -101,6 +119,27 @@ export interface ClientEvents {
   'host:reject': (payload: { participantId: string }, ack?: Ack) => void;
   'host:end-meeting': (payload: Record<string, never>, ack?: Ack) => void;
   'host:recording': (payload: { action: 'start' | 'stop' }, ack?: Ack) => void;
+
+  'host:spotlight': (payload: { identity: string; on: boolean }, ack?: Ack) => void;
+  'host:announce': (payload: { body: string }, ack?: Ack<AnnouncementPayload>) => void;
+  'host:announce-clear': (payload: { id: string }, ack?: Ack) => void;
+
+  'host:block': (payload: { identity: string; reason?: string }, ack?: Ack) => void;
+  'host:unblock': (payload: { entryId: string }, ack?: Ack) => void;
+  'host:blocklist': (payload: Record<string, never>, ack?: Ack<BlocklistEntry[]>) => void;
+
+  'host:poll-create': (
+    payload: {
+      question: string;
+      options: string[];
+      multiSelect?: boolean;
+      anonymous?: boolean;
+      hideResultsUntilClosed?: boolean;
+    },
+    ack?: Ack<PollPayload>,
+  ) => void;
+  'host:poll-close': (payload: { pollId: string }, ack?: Ack<PollPayload>) => void;
+  'poll:vote': (payload: { pollId: string; optionIds: string[] }, ack?: Ack<PollPayload>) => void;
 
   'ping:rt': (payload: Record<string, never>, ack?: Ack<{ serverTime: string }>) => void;
 }

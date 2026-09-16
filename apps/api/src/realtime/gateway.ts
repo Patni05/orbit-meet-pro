@@ -10,8 +10,13 @@ import {
   RECONNECT_GRACE_MS,
   REACTIONS,
   RT_NAMESPACE,
+  announcementSchema,
+  blockSchema,
   chatMessageSchema,
   meetingSettingsSchema,
+  pollCreateSchema,
+  pollVoteSchema,
+  spotlightSchema,
   type Ack,
   type ClientEvents,
   type MeetingSettings,
@@ -34,6 +39,8 @@ import {
   updateParticipantMetadata,
 } from '../lib/livekit';
 import { toRoomParticipant } from '../modules/meetings/join.service';
+import { blockParticipant, listBlocklist, unblock } from '../modules/meetings/blocklist.service';
+import { castVote, closePoll, createPoll, loadPoll, toPollPayload } from '../modules/meetings/polls.service';
 import {
   endMeeting,
   findById,
@@ -170,6 +177,32 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
     ...args: Parameters<ServerEvents[E]>
   ): void {
     nsp.to(participantRoom(participantId)).emit(event, ...args);
+  }
+
+  /**
+   * Sends a poll to everyone, shaped per recipient.
+   *
+   * A single broadcast will not do: hosts may see the running tally while
+   * participants may not, and each person needs their own selections marked.
+   * Hiding a tally client-side would be theatre — the number would still be
+   * sitting in the frame.
+   */
+  async function broadcastPoll(
+    pollId: string,
+    event: 'poll:opened' | 'poll:updated' | 'poll:closed',
+  ): Promise<void> {
+    const poll = await loadPoll(pollId);
+    if (!poll) return;
+
+    const participants = await prisma.meetingParticipant.findMany({
+      where: { meetingId: poll.meetingId, status: 'ADMITTED' },
+      select: { id: true, role: true },
+    });
+
+    for (const person of participants) {
+      const isHost = person.role === 'HOST' || person.role === 'COHOST';
+      emitToParticipant(person.id, event, toPollPayload(poll, { participantId: person.id, isHost }));
+    }
   }
 
   async function refreshWaitingList(meeting: MeetingWithHost): Promise<void> {
@@ -889,6 +922,279 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
         await redis.srem(KEYS.liveMeetings, meetingId).catch(() => undefined);
         await deleteRoom(ended.code);
         ackOk(ack, undefined as never);
+      });
+
+      // ------------------------------------------------------- spotlight
+
+      socket.on('host:spotlight', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = spotlightSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const target = await prisma.meetingParticipant.findUnique({
+          where: { meetingId_identity: { meetingId, identity: parsed.data.identity } },
+        });
+        if (!target) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That person has already left.');
+
+        const current = new Set(host.meeting.spotlightIdentities);
+        if (parsed.data.on) current.add(parsed.data.identity);
+        else current.delete(parsed.data.identity);
+
+        const identities = [...current];
+        await prisma.meeting.update({
+          where: { id: meetingId },
+          data: { spotlightIdentities: identities },
+        });
+
+        nsp.to(meetingRoom(meetingId)).emit('spotlight:updated', {
+          identities,
+          by: host.participant.displayName,
+        });
+        await recordEvent(meetingId, host.participant.userId, host.participant.identity, 'SPOTLIGHT_CHANGED', {
+          identities,
+        });
+        ackOk(ack, undefined as never);
+      });
+
+      // ---------------------------------------------------- announcements
+
+      socket.on('host:announce', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = announcementSchema.safeParse(payload);
+        if (!parsed.success) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, parsed.error.issues[0]?.message ?? 'Invalid announcement.');
+        }
+
+        // Announcements are shown to everyone, so they get the same control
+        // character stripping as chat. They are rendered as text, never HTML.
+        const body = sanitizeText(parsed.data.body);
+        if (!body) return ackErr(ack, ERROR_CODES.VALIDATION, 'Write something to announce.');
+
+        const hostUserId = host.participant.userId;
+        if (!hostUserId) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only a signed-in host can post an announcement.');
+        }
+
+        // Only the newest announcement is displayed; retire the previous one
+        // so a stale banner cannot linger behind the new one.
+        await prisma.meetingAnnouncement.updateMany({
+          where: { meetingId, dismissedAt: null },
+          data: { dismissedAt: new Date() },
+        });
+
+        const row = await prisma.meetingAnnouncement.create({
+          data: { meetingId, body, createdById: hostUserId },
+        });
+
+        const announcement = {
+          id: row.id,
+          body: row.body,
+          byName: host.participant.displayName,
+          createdAt: row.createdAt.toISOString(),
+        };
+
+        nsp.to(meetingRoom(meetingId)).emit('announcement:posted', announcement);
+        ackOk(ack, announcement);
+      });
+
+      socket.on('host:announce-clear', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        await prisma.meetingAnnouncement.updateMany({
+          where: { id: payload.id, meetingId, dismissedAt: null },
+          data: { dismissedAt: new Date() },
+        });
+
+        nsp.to(meetingRoom(meetingId)).emit('announcement:cleared', { id: payload.id });
+        ackOk(ack, undefined as never);
+      });
+
+      // -------------------------------------------------------- blocklist
+
+      socket.on('host:block', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = blockSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const target = await prisma.meetingParticipant.findUnique({
+          where: { meetingId_identity: { meetingId, identity: parsed.data.identity } },
+        });
+        if (!target) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That person has already left.');
+
+        // The meeting owner is not blockable, and a co-host cannot block the
+        // person who appointed them. Hierarchy is enforced here, not in the UI.
+        if (target.role === 'HOST') {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'The meeting host cannot be blocked.');
+        }
+        if (host.participant.role === 'COHOST' && target.role === 'COHOST') {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only the host can block a co-host.');
+        }
+        if (target.id === host.participant.id) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, 'You cannot block yourself.');
+        }
+
+        const hostUserId = host.participant.userId;
+        if (!hostUserId) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only a signed-in host can block someone.');
+        }
+
+        await blockParticipant({
+          meetingId,
+          participant: target,
+          blockedById: hostUserId,
+          reason: parsed.data.reason,
+        });
+
+        // Tell them why before the connection goes, then remove them from the
+        // SFU so media stops even if the socket lingers.
+        emitToParticipant(target.id, 'you:blocked', {
+          by: host.participant.displayName,
+          reason: parsed.data.reason ?? null,
+        });
+
+        await prisma.meetingParticipant.update({
+          where: { id: target.id },
+          data: { status: 'REMOVED', connected: false, leftAt: new Date() },
+        });
+        await removeFromSfu(host.meeting.code, target.identity).catch(() => undefined);
+
+        nsp.to(meetingRoom(meetingId)).emit('participant:left', {
+          identity: target.identity,
+          name: target.displayName,
+          reason: 'REMOVED',
+        });
+
+        const entries = await listBlocklist(meetingId);
+        nsp.to(hostsRoom(meetingId)).emit('blocklist:updated', { entries });
+
+        await recordEvent(meetingId, host.participant.userId, host.participant.identity, 'PARTICIPANT_BLOCKED', {
+          target: target.identity,
+        });
+        logger.info(
+          { meetingId, by: host.participant.identity, target: target.identity },
+          'participant blocked',
+        );
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:unblock', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const removed = await unblock(meetingId, payload.entryId);
+        if (!removed) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That entry is already gone.');
+
+        const entries = await listBlocklist(meetingId);
+        nsp.to(hostsRoom(meetingId)).emit('blocklist:updated', { entries });
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:blocklist', async (_payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+        ackOk(ack, await listBlocklist(meetingId));
+      });
+
+      // ------------------------------------------------------------ polls
+
+      socket.on('host:poll-create', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = pollCreateSchema.safeParse(payload);
+        if (!parsed.success) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, parsed.error.issues[0]?.message ?? 'Invalid poll.');
+        }
+
+        const hostUserId = host.participant.userId;
+        if (!hostUserId) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only a signed-in host can start a poll.');
+        }
+
+        const poll = await createPoll({
+          meetingId,
+          createdById: hostUserId,
+          question: sanitizeText(parsed.data.question),
+          options: parsed.data.options.map((option: string) => sanitizeText(option)),
+          multiSelect: parsed.data.multiSelect,
+          anonymous: parsed.data.anonymous,
+          hideResultsUntilClosed: parsed.data.hideResultsUntilClosed,
+        });
+        if (!poll) return ackErr(ack, ERROR_CODES.INTERNAL, 'The poll could not be created.');
+
+        // Each side gets its own view: hosts see the tally, participants do not
+        // until the poll closes.
+        await broadcastPoll(poll.id, 'poll:opened');
+        ackOk(ack, toPollPayload(poll, { participantId: host.participant.id, isHost: true }));
+      });
+
+      socket.on('host:poll-close', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const existing = await loadPoll(payload.pollId);
+        if (!existing || existing.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That poll no longer exists.');
+        }
+
+        const closed = await closePoll(payload.pollId);
+        if (!closed) return ackErr(ack, ERROR_CODES.INTERNAL, 'The poll could not be closed.');
+
+        await broadcastPoll(closed.id, 'poll:closed');
+        ackOk(ack, toPollPayload(closed, { participantId: host.participant.id, isHost: true }));
+      });
+
+      socket.on('poll:vote', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const parsed = pollVoteSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid vote.');
+
+        // Voting is rate limited like chat: a poll is a small target for a
+        // flood, and every vote is a write.
+        const votes = await bumpCounter('poll-vote', ctx.participant.id, 60);
+        if (votes > 40) return ackErr(ack, ERROR_CODES.RATE_LIMITED, 'Slow down a moment.');
+
+        const existing = await loadPoll(parsed.data.pollId);
+        if (!existing || existing.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That poll no longer exists.');
+        }
+
+        const result = await castVote({
+          pollId: parsed.data.pollId,
+          participantId: ctx.participant.id,
+          optionIds: parsed.data.optionIds,
+        });
+
+        if (!result.ok) {
+          const message =
+            result.code === 'CLOSED'
+              ? 'That poll has closed.'
+              : result.code === 'TOO_MANY'
+                ? 'This poll allows one answer.'
+                : 'That option is not part of this poll.';
+          return ackErr(ack, ERROR_CODES.VALIDATION, message);
+        }
+
+        const updated = await loadPoll(parsed.data.pollId);
+        if (!updated) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That poll no longer exists.');
+
+        await broadcastPoll(updated.id, 'poll:updated');
+        ackOk(
+          ack,
+          toPollPayload(updated, {
+            participantId: ctx.participant.id,
+            isHost: ctx.participant.role === 'HOST' || ctx.participant.role === 'COHOST',
+          }),
+        );
       });
 
       socket.on('ping:rt', (_payload, ack) => {

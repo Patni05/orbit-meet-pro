@@ -10,12 +10,13 @@ import { useMeetingTimer } from '@/hooks/useMeetingTimer';
 import { capabilities } from '@/lib/capabilities';
 import { meetingClient } from '@/lib/meeting-client';
 import { selectIsHost, useRoomStore } from '@/lib/room-store';
+import { AnnouncementBanner } from './AnnouncementBanner';
 import { AudioRenderer } from './AudioRenderer';
 import { ControlBar } from './ControlBar';
 import { InviteDialog } from './InviteDialog';
 import { NoticeStack } from './NoticeStack';
 import { VideoGrid } from './VideoGrid';
-import { LeaveDialog, RecordingDialog, SettingsDialog, ShortcutsDialog } from './dialogs';
+import { AnnounceDialog, LeaveDialog, RecordingDialog, SettingsDialog, ShortcutsDialog } from './dialogs';
 
 /**
  * Side panels are loaded on demand: chat, people and diagnostics are not part
@@ -24,6 +25,8 @@ import { LeaveDialog, RecordingDialog, SettingsDialog, ShortcutsDialog } from '.
 const ChatPanel = lazy(() => import('./ChatPanel').then((m) => ({ default: m.ChatPanel })));
 const PeoplePanel = lazy(() => import('./PeoplePanel').then((m) => ({ default: m.PeoplePanel })));
 const InfoPanel = lazy(() => import('./InfoPanel').then((m) => ({ default: m.InfoPanel })));
+const PollsPanel = lazy(() => import('./PollsPanel').then((m) => ({ default: m.PollsPanel })));
+const BlocklistPanel = lazy(() => import('./BlocklistPanel').then((m) => ({ default: m.BlocklistPanel })));
 const DiagnosticsPanel = lazy(() =>
   import('./DiagnosticsPanel').then((m) => ({ default: m.DiagnosticsPanel })),
 );
@@ -59,6 +62,7 @@ export function MeetingRoom({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [recordingOpen, setRecordingOpen] = useState(false);
+  const [announceOpen, setAnnounceOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
 
   const elapsed = useMeetingTimer(meeting?.startedAt ?? null, serverOffset);
@@ -145,7 +149,11 @@ export function MeetingRoom({
           ? 'Meeting information'
           : panel === 'diagnostics'
             ? 'Connection information'
-            : '';
+            : panel === 'polls'
+              ? 'Polls'
+              : panel === 'blocklist'
+                ? 'Blocked participants'
+                : '';
 
   return (
     <div className="meeting-surface flex h-dvh flex-col overflow-hidden">
@@ -217,6 +225,8 @@ export function MeetingRoom({
         </div>
       )}
 
+      <AnnouncementBanner />
+
       {/* ---------------------------------------------------------- body */}
       <div className="flex min-h-0 flex-1">
         <main id="main" className="min-w-0 flex-1">
@@ -269,6 +279,8 @@ export function MeetingRoom({
                   {panel === 'people' && <PeoplePanel />}
                   {panel === 'info' && <InfoPanel />}
                   {panel === 'diagnostics' && <DiagnosticsPanel />}
+                  {panel === 'polls' && <PollsPanel />}
+                  {panel === 'blocklist' && <BlocklistPanel />}
                 </Suspense>
               </ErrorBoundary>
             </div>
@@ -288,6 +300,7 @@ export function MeetingRoom({
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
         onToggleRecording={() => setRecordingOpen(true)}
+        onOpenAnnounce={() => setAnnounceOpen(true)}
       />
 
       {/* Audio is rendered once, outside the grid, and never remounts on layout change. */}
@@ -313,6 +326,8 @@ export function MeetingRoom({
       />
 
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
+      <AnnounceDialog open={announceOpen} onClose={() => setAnnounceOpen(false)} />
 
       {meeting && (
         <InviteDialog

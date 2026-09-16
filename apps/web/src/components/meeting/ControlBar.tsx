@@ -2,7 +2,10 @@
 
 import { REACTIONS, REACTION_EMOJI, type ReactionKey } from '@orbit/shared';
 import {
+  BarChart3,
   Circle,
+  Megaphone,
+  ShieldBan,
   Hand,
   Keyboard,
   LayoutGrid,
@@ -35,6 +38,7 @@ export interface ControlBarProps {
   onOpenSettings: () => void;
   onOpenShortcuts: () => void;
   onToggleRecording: () => void;
+  onOpenAnnounce: () => void;
 }
 
 /**
@@ -55,6 +59,7 @@ export function ControlBar(props: ControlBarProps) {
   const layout = useRoomStore((state) => state.layout);
   const setLayout = useRoomStore((state) => state.setLayout);
   const unread = useRoomStore((state) => state.unreadCount);
+  const unreadPolls = useRoomStore((state) => state.unreadPolls);
   const waitingCount = useRoomStore((state) => state.waiting.length);
   const participantCount = useRoomStore((state) => state.order.length);
   const recording = useRoomStore((state) => state.recording);
@@ -100,6 +105,9 @@ export function ControlBar(props: ControlBarProps) {
           onToggleHand={props.onToggleHand}
           handRaised={handRaised}
           onOpenReactions={() => setReactionsOpen(true)}
+          onOpenPolls={() => setPanel('polls')}
+          onOpenAnnounce={props.onOpenAnnounce}
+          onOpenBlocklist={() => setPanel('blocklist')}
         />
       )}
 
@@ -355,6 +363,9 @@ function MoreMenu({
   onToggleHand,
   handRaised,
   onOpenReactions,
+  onOpenPolls,
+  onOpenAnnounce,
+  onOpenBlocklist,
 }: {
   onClose: () => void;
   isHost: boolean;
@@ -373,6 +384,9 @@ function MoreMenu({
   onToggleHand: () => void;
   handRaised: boolean;
   onOpenReactions: () => void;
+  onOpenPolls: () => void;
+  onOpenAnnounce: () => void;
+  onOpenBlocklist: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const debugAvailable = process.env.NODE_ENV !== 'production';
@@ -505,6 +519,19 @@ function MoreMenu({
         role="menuitem"
         className={item}
         onClick={() => {
+          onOpenPolls();
+          onClose();
+        }}
+      >
+        <BarChart3 className="h-4 w-4" />
+        Polls
+      </button>
+
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        onClick={() => {
           onOpenShortcuts();
           onClose();
         }}
@@ -529,6 +556,31 @@ function MoreMenu({
           >
             <Circle className={`h-4 w-4 ${recordingActive ? 'fill-danger-500 text-danger-500' : ''}`} />
             {recordingActive ? 'Stop recording' : 'Start recording'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
+              onOpenAnnounce();
+              onClose();
+            }}
+          >
+            <Megaphone className="h-4 w-4" />
+            Send an announcement
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
+              onOpenBlocklist();
+              onClose();
+            }}
+          >
+            <ShieldBan className="h-4 w-4" />
+            Blocked participants
           </button>
         </>
       )}
