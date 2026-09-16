@@ -53,6 +53,10 @@ services:
     # --node-ip is what the browser will try to reach for media. 127.0.0.1 works
     # for tabs on this machine; set LIVEKIT_NODE_IP to your LAN IP to test from
     # a phone or a second computer.
+    environment:
+      # Real credentials come from .env so they never enter the repo; this
+      # overrides the placeholder key in livekit.yaml.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     command: >
       --config /etc/livekit.yaml
       --node-ip ${LIVEKIT_NODE_IP:-127.0.0.1}
@@ -165,6 +169,8 @@ services:
     profiles: ['lan']
     ports:
       - '8443:8443'
+      # Plain HTTP for Cloudflare Tunnel (TLS is terminated at the edge).
+      - '8080:8080'
     volumes:
       - ./infrastructure/nginx/lan-dev.conf:/etc/nginx/conf.d/default.conf:ro
       - ./infrastructure/nginx/certs:/etc/nginx/certs:ro

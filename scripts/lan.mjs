@@ -225,8 +225,8 @@ const origin = `https://${ip}:${PORT}`;
 const updates = {
   // Announced, not imposed: see serviceBases() in apps/web/src/lib/api.ts and
   // livekitUrlFor() in the API's join service.
-  PROXY_ORIGIN: origin,
-  NEXT_PUBLIC_PROXY_ORIGIN: origin,
+  PROXY_ORIGINS: origin,
+  NEXT_PUBLIC_PROXY_ORIGINS: origin,
   // Invitation links should be the address other devices can actually open.
   APP_URL: origin,
   // The address peers use for media. Not proxied — WebRTC goes direct.

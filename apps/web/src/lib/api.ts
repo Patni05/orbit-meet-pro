@@ -59,14 +59,17 @@ function resolveServiceUrl(configured: string): string {
 }
 
 /**
- * Origin of the LAN HTTPS proxy, when one is running.
+ * Origins that front this app through a single-origin reverse proxy.
  *
- * Set by `npm run lan`. Its presence means the app is reachable two ways at
- * once, and which one is correct depends entirely on which page the browser
- * has open — so the choice has to be made here, at runtime, rather than baked
+ * Set by `npm run lan` and `npm run tunnel`. The app can be reachable several
+ * ways at once, and which base is correct depends entirely on which page the
+ * browser has open — so the choice is made here at runtime, rather than baked
  * in at build time.
  */
-const PROXY_ORIGIN = process.env.NEXT_PUBLIC_PROXY_ORIGIN ?? '';
+const PROXY_ORIGINS = (process.env.NEXT_PUBLIC_PROXY_ORIGINS ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 /**
  * Works out where the API is, from the page the browser actually loaded.
@@ -90,10 +93,11 @@ function serviceBases(): { api: string; rt: string } {
     return { api: fallbackApi, rt: fallbackRt };
   }
 
-  if (PROXY_ORIGIN && window.location.origin === PROXY_ORIGIN) {
-    // nginx strips /api before the API sees it, and routes /realtime straight
-    // through, so the socket wants the bare origin.
-    return { api: `${PROXY_ORIGIN}/api`, rt: PROXY_ORIGIN };
+  const origin = window.location.origin;
+  if (PROXY_ORIGINS.includes(origin)) {
+    // The proxy strips /api before the API sees it, and routes /realtime
+    // straight through, so the socket wants the bare origin.
+    return { api: `${origin}/api`, rt: origin };
   }
 
   return { api: resolveServiceUrl(fallbackApi), rt: resolveServiceUrl(fallbackRt) };

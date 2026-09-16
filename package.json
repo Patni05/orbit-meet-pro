@@ -33,7 +33,9 @@
     "setup": "node scripts/setup.mjs",
     "test:shared": "npm run test -w @orbit/shared",
     "lan": "node scripts/lan.mjs",
-    "lan:off": "node scripts/lan-off.mjs"
+    "lan:off": "node scripts/lan-off.mjs",
+    "tunnel": "node scripts/tunnel.mjs",
+    "start": "concurrently -n api,web -c cyan,green \"npm:start:api\" \"npm:start:web\""
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

@@ -166,10 +166,10 @@ export async function issueTicket(
  * would fail on a certificate it has never seen.
  */
 function livekitUrlFor(requestOrigin?: string): string {
-  if (env.PROXY_ORIGIN && requestOrigin === env.PROXY_ORIGIN) {
-    // Signalling rides the origin the client already trusts; nginx forwards
-    // /livekit to the SFU. Media still goes direct over UDP.
-    return `${env.PROXY_ORIGIN.replace(/^http/, 'ws')}/livekit`;
+  if (requestOrigin && env.PROXY_ORIGINS.includes(requestOrigin)) {
+    // Signalling rides the origin the client already trusts; the proxy forwards
+    // /livekit to the SFU. Media still goes direct, not through the proxy.
+    return `${requestOrigin.replace(/^http/, 'ws')}/livekit`;
   }
   return env.LIVEKIT_PUBLIC_URL;
 }

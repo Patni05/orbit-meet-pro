@@ -44,14 +44,17 @@ const schema = z.object({
   LIVEKIT_PUBLIC_URL: z.string().min(1).default('ws://localhost:7880'),
 
   /**
-   * Origin of the LAN HTTPS proxy, when one is in use (see scripts/lan.mjs).
+   * Origins that front this deployment through a single-origin reverse proxy.
    *
-   * Set, it means the same deployment is reachable two ways at once: directly
-   * on localhost for development, and through the proxy for phones. Requests
-   * arriving through the proxy are told to reach the SFU through it too, so
-   * they never have to trust a second certificate. Empty in normal setups.
+   * There can be several at once — a LAN address for phones on the same Wi-Fi
+   * and a Cloudflare Tunnel hostname for everyone else — and the same server
+   * answers all of them. A request arriving on one of these is told to reach
+   * the SFU through that same origin, so the browser never has to open a
+   * second connection to a host it has not already trusted.
+   *
+   * Empty in a plain setup, where clients talk to the API directly.
    */
-  PROXY_ORIGIN: z.string().default(''),
+  PROXY_ORIGINS: csv.default(''),
   LIVEKIT_API_KEY: z.string().min(1, 'LIVEKIT_API_KEY is required'),
   LIVEKIT_API_SECRET: z.string().min(1, 'LIVEKIT_API_SECRET is required'),
   /** Lifetime of the participant token minted per join. Short by design. */
