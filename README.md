@@ -7,6 +7,28 @@ vendor you do not control.
 Built on WebRTC with [LiveKit](https://livekit.io) as the SFU, so media flows
 between participants and your own server rather than a third party.
 
+## Live demo
+
+**<https://carmen-flashing-search-contribute.trycloudflare.com>**
+
+A real deployment, served over HTTPS through a Cloudflare Tunnel. You can open
+it on a phone or a laptop and join a meeting with just a name.
+
+Two things to know before you judge it by that link:
+
+**The demo runs on a development machine, not a server.** It is live only while
+that machine is awake, and a free Cloudflare Tunnel gets a new hostname every
+time it restarts — so the URL above will eventually stop resolving. Anyone
+running this themselves gets a permanent address by following
+[Publishing it on the internet](#publishing-it-on-the-internet).
+
+**Audio and video only connect for people on the host machine's own network.**
+A tunnel carries HTTP and WebSocket; WebRTC media is UDP and travels directly
+to whichever machine runs the SFU, which a home router does not expose. The
+app, sign-in, chat, quizzes, polls and the whiteboard all work from anywhere.
+[Media needs its own path](#media-needs-its-own-path) explains the two ways to
+fix it, and `npm run media:doctor` diagnoses a particular network.
+
 ---
 
 ## Quick start
@@ -37,8 +59,36 @@ meeting token already issued.
 | **In-call** | Camera, microphone, screen sharing, chat, reactions, raised hands, grid/speaker layouts. |
 | **Moderation** | Mute, remove, co-host, spotlight, per-meeting blocklist, announcements — all re-authorized server-side. |
 | **Polls** | Live polls whose tallies are genuinely withheld on the wire until they close. |
+| **Quizzes** | Graded exams with a server-held clock, ranking, per-question analytics and CSV export. |
+| **Whiteboard** | Shared board synced as strokes, with per-author undo, host permissions and PNG export. |
+| **Personalisation** | Built-in avatars, command palette (Ctrl/Cmd+K), focus mode, picture-in-picture. |
 | **Resilience** | Reconnects restore your seat rather than cloning you into the roster. |
 | **Recording** | Optional, via LiveKit Egress, and never silent — every participant is told. |
+
+---
+
+## Tests
+
+184 automated checks, all passing, run against both localhost and the live
+deployment:
+
+```bash
+npm test                                      # 51 unit tests
+npm run test:e2e                              # 10 browser tests, two real browsers
+node apps/api/scripts/test-moderation.mjs     # 36 checks
+node apps/api/scripts/test-quiz.mjs           # 51 checks
+node apps/api/scripts/test-whiteboard.mjs     # 36 checks
+```
+
+The integration suites talk to the realtime API exactly as a browser would,
+and deliberately send things no UI would: host commands from a participant's
+socket, answers after a quiz deadline, duplicate submissions, oversized
+payloads. What they prove is that the *server* refuses them — a hidden button
+is a convenience, never a boundary.
+
+The browser suite drives two independent contexts through a real meeting with
+Chromium's fake media devices, asserting that `<video>` elements actually
+report frame sizes rather than that buttons exist.
 
 ---
 
