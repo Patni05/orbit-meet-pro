@@ -34,6 +34,8 @@ export interface JoinRequest {
   password?: string;
   /** Stable per-tab id from the client; the key to reconnecting without duplicates. */
   sessionId?: string;
+  /** Built-in avatar chosen on the pre-join screen. */
+  avatarUrl?: string | null;
   ip?: string;
   /** Origin the client used to reach us, e.g. https://192.168.1.35:8443. */
   requestOrigin?: string;
@@ -258,7 +260,7 @@ export async function joinMeeting(request: JoinRequest): Promise<JoinOutcome> {
         where: { id: existing.id },
         data: {
           displayName,
-          avatarUrl: user?.avatarUrl ?? existing.avatarUrl,
+          avatarUrl: request.avatarUrl ?? user?.avatarUrl ?? existing.avatarUrl,
           role,
           status: needsWaitingRoom ? 'WAITING' : 'ADMITTED',
           sessionId: request.sessionId ?? existing.sessionId,
@@ -276,7 +278,7 @@ export async function joinMeeting(request: JoinRequest): Promise<JoinOutcome> {
           identity,
           sessionId: request.sessionId ?? null,
           displayName,
-          avatarUrl: user?.avatarUrl ?? null,
+          avatarUrl: request.avatarUrl ?? user?.avatarUrl ?? null,
           isGuest: !user,
           role,
           status: needsWaitingRoom ? 'WAITING' : 'ADMITTED',

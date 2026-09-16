@@ -92,6 +92,17 @@ export const joinMeetingSchema = z.object({
    * participant row instead of creating a duplicate.
    */
   sessionId: z.string().min(8).max(64).optional(),
+  /**
+   * A built-in avatar id, such as "preset:a-fox". Constrained to that shape on
+   * purpose: accepting an arbitrary URL here would let anyone point every
+   * participant list at a server of their choosing, which is both a tracking
+   * beacon and a way to smuggle in unexpected content.
+   */
+  avatarUrl: z
+    .string()
+    .regex(/^preset:[a-z0-9-]{1,32}$/, 'Choose one of the built-in avatars.')
+    .nullable()
+    .optional(),
 });
 
 export const chatMessageSchema = z.object({

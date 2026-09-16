@@ -3,7 +3,9 @@
 import { REACTIONS, REACTION_EMOJI, type ReactionKey } from '@orbit/shared';
 import {
   BarChart3,
+  Focus,
   GraduationCap,
+  PictureInPicture2,
   Circle,
   Megaphone,
   ShieldBan,
@@ -40,6 +42,8 @@ export interface ControlBarProps {
   onOpenShortcuts: () => void;
   onToggleRecording: () => void;
   onOpenAnnounce: () => void;
+  onToggleFocus: () => void;
+  onPictureInPicture: () => void;
 }
 
 /**
@@ -110,6 +114,8 @@ export function ControlBar(props: ControlBarProps) {
           onOpenQuiz={() => setPanel('quiz')}
           onOpenAnnounce={props.onOpenAnnounce}
           onOpenBlocklist={() => setPanel('blocklist')}
+          onToggleFocus={props.onToggleFocus}
+          onPictureInPicture={props.onPictureInPicture}
         />
       )}
 
@@ -369,6 +375,8 @@ function MoreMenu({
   onOpenQuiz,
   onOpenAnnounce,
   onOpenBlocklist,
+  onToggleFocus,
+  onPictureInPicture,
 }: {
   onClose: () => void;
   isHost: boolean;
@@ -391,6 +399,8 @@ function MoreMenu({
   onOpenQuiz: () => void;
   onOpenAnnounce: () => void;
   onOpenBlocklist: () => void;
+  onToggleFocus: () => void;
+  onPictureInPicture: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const debugAvailable = process.env.NODE_ENV !== 'production';
@@ -542,6 +552,38 @@ function MoreMenu({
       >
         <GraduationCap className="h-4 w-4" />
         Quiz
+      </button>
+
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        onClick={() => {
+          onToggleFocus();
+          onClose();
+        }}
+      >
+        <Focus className="h-4 w-4" />
+        Focus mode
+      </button>
+
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        disabled={!capabilities().pictureInPicture}
+        title={
+          capabilities().pictureInPicture
+            ? undefined
+            : 'This browser does not support picture-in-picture.'
+        }
+        onClick={() => {
+          onPictureInPicture();
+          onClose();
+        }}
+      >
+        <PictureInPicture2 className="h-4 w-4" />
+        Picture-in-picture
       </button>
 
       <button

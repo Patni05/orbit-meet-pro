@@ -132,6 +132,8 @@ interface RoomState {
   panel: PanelId;
   pinned: string | null;
   fullscreenIdentity: string | null;
+  /** Hides everything but the speaker and the essential controls. */
+  focusMode: boolean;
 
   reactions: FloatingReaction[];
   notices: Notice[];
@@ -185,6 +187,7 @@ interface RoomState {
   setPanel: (panel: PanelId) => void;
   togglePin: (identity: string) => void;
   setFullscreenIdentity: (identity: string | null) => void;
+  toggleFocusMode: () => void;
   setNetworkStats: (stats: Partial<NetworkStats>) => void;
   reset: () => void;
 }
@@ -234,6 +237,7 @@ const initial = {
   layout: 'grid' as LayoutMode,
   panel: null as PanelId,
   pinned: null,
+  focusMode: false,
   fullscreenIdentity: null,
   reactions: [] as FloatingReaction[],
   notices: [] as Notice[],
@@ -441,7 +445,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   },
 
   setQuizStarting(payload) {
-    set({ quizStarting: payload, quizResults: null, panel: payload ? 'quiz' : undefined });
+    // `undefined` in a Zustand partial overwrites rather than being ignored, so
+    // the panel is only named when there is actually a quiz to show — clearing
+    // the lobby must leave whatever panel the user had open alone.
+    set((state) => ({
+      quizStarting: payload,
+      quizResults: null,
+      panel: payload ? 'quiz' : state.panel,
+    }));
   },
 
   setQuizResults(results) {
@@ -511,6 +522,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
 
   setFullscreenIdentity(fullscreenIdentity) {
     set({ fullscreenIdentity });
+  },
+
+  toggleFocusMode() {
+    // Focus mode also closes any open panel: the point is fewer things on
+    // screen, and leaving chat open would defeat it.
+    set((state) => ({ focusMode: !state.focusMode, panel: state.focusMode ? state.panel : null }));
   },
 
   setNetworkStats(stats) {

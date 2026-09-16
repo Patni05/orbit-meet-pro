@@ -1,9 +1,9 @@
 'use client';
 
-import { REACTION_EMOJI, type RoomParticipant } from '@orbit/shared';
+import type { RoomParticipant } from '@orbit/shared';
 import { ConnectionQuality } from 'livekit-client';
 import { Hand, Maximize2, MicOff, Pin, PinOff, ScreenShare, SignalLow, SignalMedium, WifiOff } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useTrackElement } from '@/hooks/useTrackElement';
@@ -34,15 +34,9 @@ export const VideoTile = memo(function VideoTile({
   const pinned = useRoomStore((state) => state.pinned === identity);
   const togglePin = useRoomStore((state) => state.togglePin);
   const setFullscreenIdentity = useRoomStore((state) => state.setFullscreenIdentity);
-  const reactions = useRoomStore((state) => state.reactions);
 
   const videoTrack = bundle?.camera;
   const videoRef = useTrackElement<HTMLVideoElement>(videoTrack);
-
-  const myReactions = useMemo(
-    () => reactions.filter((reaction) => reaction.identity === identity),
-    [reactions, identity],
-  );
 
   if (!participant) return null;
 
@@ -82,21 +76,6 @@ export const VideoTile = memo(function VideoTile({
             seed={participant.identity}
             size={compact ? 'md' : variant === 'stage' ? 'xl' : 'lg'}
           />
-        </div>
-      )}
-
-      {/* ----------------------------------------------------- reactions */}
-      {myReactions.length > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-12 flex justify-center">
-          {myReactions.map((reaction) => (
-            <span
-              key={reaction.id}
-              className="animate-[float-up_2.4s_cubic-bezier(0.22,1,0.36,1)_forwards] text-4xl"
-              aria-hidden="true"
-            >
-              {REACTION_EMOJI[reaction.reaction]}
-            </span>
-          ))}
         </div>
       )}
 

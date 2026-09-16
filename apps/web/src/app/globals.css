@@ -187,3 +187,37 @@
     word-break: break-word;
   }
 }
+
+/**
+ * Meeting-wide reactions.
+ *
+ * Only transform and opacity change, so the compositor can run this off the
+ * main thread and a burst of reactions costs almost nothing. `--drift` is set
+ * per reaction so each one curves slightly differently on the way up.
+ */
+@keyframes reaction-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) scale(0.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1.08);
+  }
+  22% {
+    transform: translate3d(0, -12px, 0) scale(1);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--drift, 0px), -230px, 0) scale(0.85);
+  }
+}
+
+.animate-reaction-rise {
+  animation: reaction-rise 3.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  /* Promotes the element to its own layer for the duration of the rise. */
+  will-change: transform, opacity;
+}

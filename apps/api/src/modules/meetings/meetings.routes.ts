@@ -79,6 +79,7 @@ const meetingRoutes: FastifyPluginAsync = async (fastify) => {
         displayName: input.displayName,
         password: input.password,
         sessionId: input.sessionId,
+        avatarUrl: input.avatarUrl ?? null,
         ip: request.ip,
         // Behind a proxy the Host header is the public one, so this is the
         // origin the browser actually used rather than the internal address.

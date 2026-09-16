@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Logo } from '@/components/brand/Logo';
+import { AvatarPicker } from './AvatarPicker';
 import { Avatar } from '@/components/ui/Avatar';
 import { Alert, Button, Field, Input, Select } from '@/components/ui/primitives';
 import { browserUnsupported, capabilities, unavailableReason } from '@/lib/capabilities';
@@ -29,6 +30,8 @@ import {
 
 export interface PreJoinResult {
   displayName: string;
+  /** Built-in avatar id, or null to use initials. */
+  avatarUrl: string | null;
   password?: string;
   micEnabled: boolean;
   cameraEnabled: boolean;
@@ -45,6 +48,9 @@ export interface PreJoinResult {
  * failure is explained, and the Join button stays enabled so somebody with a
  * broken webcam can still attend.
  */
+/** Where a chosen avatar is remembered between meetings. */
+const AVATAR_STORAGE_KEY = 'orbit.avatar';
+
 export function PreJoin({
   meeting,
   defaultName,
@@ -69,6 +75,13 @@ export function PreJoin({
   const streamRef = useRef<MediaStream | null>(null);
 
   const [name, setName] = useState(defaultName);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(AVATAR_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [password, setPassword] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
 
@@ -218,8 +231,17 @@ export function PreJoin({
     stopStream(streamRef.current);
     streamRef.current = null;
 
+    // Remembered per browser so the same person keeps their avatar next time.
+    try {
+      if (avatarUrl) localStorage.setItem(AVATAR_STORAGE_KEY, avatarUrl);
+      else localStorage.removeItem(AVATAR_STORAGE_KEY);
+    } catch {
+      // Storage can be disabled; the choice still applies to this meeting.
+    }
+
     onJoin({
       displayName: trimmed,
+      avatarUrl,
       password: password || undefined,
       micEnabled,
       cameraEnabled,
@@ -422,6 +444,10 @@ export function PreJoin({
                 className="border-white/15 bg-ink-850 text-ink-50 placeholder:text-ink-500"
               />
             </Field>
+
+            <div className="rounded-2xl bg-ink-900 p-4 ring-1 ring-white/10">
+              <AvatarPicker name={name} value={avatarUrl} onChange={setAvatarUrl} />
+            </div>
 
             {passwordRequired && (
               <Field label="Passcode" htmlFor="meeting-password" hint="The host set a passcode for this meeting.">

@@ -45,6 +45,7 @@ const rejoinKey = (code: string) => `orbit.rejoin.${code}`;
 
 interface RejoinHint {
   displayName: string;
+  avatarUrl: string | null;
   micEnabled: boolean;
   cameraEnabled: boolean;
   audioDeviceId?: string;
@@ -154,6 +155,7 @@ export default function RoomPage() {
       try {
         const outcome: JoinOutcome = await api.meetings.join(code, {
           displayName: result.displayName,
+          avatarUrl: result.avatarUrl,
           password: result.password,
           sessionId: sessionIdFor(code),
         });
@@ -218,6 +220,7 @@ export default function RoomPage() {
         try {
           const hint: RejoinHint = {
             displayName: result.displayName,
+            avatarUrl: result.avatarUrl,
             micEnabled: result.micEnabled,
             cameraEnabled: result.cameraEnabled,
             audioDeviceId: result.audioDeviceId,
@@ -275,6 +278,7 @@ export default function RoomPage() {
     void performJoin(
       {
         displayName: hint.displayName,
+        avatarUrl: hint.avatarUrl ?? null,
         micEnabled: hint.micEnabled,
         cameraEnabled: hint.cameraEnabled,
         audioDeviceId: hint.audioDeviceId,

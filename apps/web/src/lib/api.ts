@@ -289,7 +289,16 @@ export const api = {
 
     preview: (code: string) => request<{ meeting: MeetingPreview }>(`/meetings/code/${code}`),
 
-    join: (code: string, body: { displayName?: string; password?: string; sessionId: string }) =>
+    join: (
+      code: string,
+      body: {
+        displayName?: string;
+        /** Built-in avatar id, or null for the initials fallback. */
+        avatarUrl?: string | null;
+        password?: string;
+        sessionId: string;
+      },
+    ) =>
       request<JoinOutcome>(`/meetings/code/${code}/join`, { method: 'POST', body }),
 
     get: (id: string) => request<{ meeting: MeetingSummary }>(`/meetings/${id}`),

@@ -6,6 +6,7 @@ import {
   Hand,
   MicOff,
   MoreHorizontal,
+  Search,
   ScreenShareOff,
   ShieldBan,
   ShieldCheck,
@@ -18,10 +19,23 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge, Button } from '@/components/ui/primitives';
 import { meetingClient } from '@/lib/meeting-client';
 import { raisedHandsFrom, useRoomStore } from '@/lib/room-store';
+
+type FilterId = 'all' | 'hosts' | 'participants' | 'hands' | 'muted' | 'camera-off';
+
+const FILTERS: { id: FilterId; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'hosts', label: 'Hosts' },
+  { id: 'participants', label: 'Participants' },
+  { id: 'hands', label: 'Hand raised' },
+  { id: 'muted', label: 'Muted' },
+  { id: 'camera-off', label: 'Camera off' },
+];
+
 
 /**
  * People panel.
@@ -43,7 +57,10 @@ export function PeoplePanel() {
   const isHost = selfRole === 'HOST' || selfRole === 'COHOST';
   const isOwner = selfRole === 'HOST';
 
-  const roster = useMemo(
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<FilterId>('all');
+
+  const allParticipants = useMemo(
     () =>
       order
         .map((identity) => participants[identity])
@@ -55,6 +72,34 @@ export function PeoplePanel() {
         }),
     [order, participants],
   );
+
+  /**
+   * Search and filter.
+   *
+   * Derived from an already-subscribed slice and memoised on the inputs, so
+   * typing filters a large roster without re-rendering the video grid or
+   * re-sorting on every keystroke.
+   */
+  const roster = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return allParticipants.filter((person) => {
+      if (needle && !person.name.toLowerCase().includes(needle)) return false;
+      switch (filter) {
+        case 'hosts':
+          return person.role === 'HOST' || person.role === 'COHOST';
+        case 'participants':
+          return person.role === 'PARTICIPANT';
+        case 'hands':
+          return Boolean(person.handRaisedAt);
+        case 'muted':
+          return !person.micEnabled;
+        case 'camera-off':
+          return !person.cameraEnabled;
+        default:
+          return true;
+      }
+    });
+  }, [allParticipants, query, filter]);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto scrollbar-slim">
@@ -147,8 +192,53 @@ export function PeoplePanel() {
       <section className="p-4" aria-label="Participants">
         <h3 className="text-sm font-semibold text-ink-100">
           In the meeting
-          <span className="ml-2 text-xs font-normal text-ink-400">{roster.length}</span>
+          <span className="ml-2 text-xs font-normal text-ink-400">
+            {roster.length === allParticipants.length
+              ? allParticipants.length
+              : `${roster.length} of ${allParticipants.length}`}
+          </span>
         </h3>
+
+        {allParticipants.length > 3 && (
+          <div className="mt-2.5">
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search people"
+                aria-label="Search participants by name"
+                className="w-full rounded-lg border border-white/15 bg-ink-850 py-2 pl-8 pr-3 text-sm text-ink-50 placeholder:text-ink-500 focus:outline-2 focus:outline-brand-500"
+              />
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Filter participants">
+              {FILTERS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setFilter(option.id)}
+                  aria-pressed={filter === option.id}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    filter === option.id
+                      ? 'bg-brand-600 text-white'
+                      : 'bg-white/10 text-ink-300 hover:bg-white/20'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {roster.length === 0 && (
+          <p className="mt-6 text-center text-sm text-ink-500">Nobody matches that search.</p>
+        )}
 
         <ul className="mt-3 space-y-1">
           {roster.map((person) => (

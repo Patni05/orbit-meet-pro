@@ -12,9 +12,11 @@ import { meetingClient } from '@/lib/meeting-client';
 import { selectIsHost, useRoomStore } from '@/lib/room-store';
 import { AnnouncementBanner } from './AnnouncementBanner';
 import { AudioRenderer } from './AudioRenderer';
+import { CommandPalette, type Command } from './CommandPalette';
 import { ControlBar } from './ControlBar';
 import { InviteDialog } from './InviteDialog';
 import { NoticeStack } from './NoticeStack';
+import { ReactionOverlay } from './ReactionOverlay';
 import { VideoGrid } from './VideoGrid';
 import { AnnounceDialog, LeaveDialog, RecordingDialog, SettingsDialog, ShortcutsDialog } from './dialogs';
 
@@ -58,12 +60,15 @@ export function MeetingRoom({
   const notify = useRoomStore((state) => state.notify);
   const serverOffset = useRoomStore((state) => state.serverTimeOffsetMs);
   const fullscreenIdentity = useRoomStore((state) => state.fullscreenIdentity);
+  const focusMode = useRoomStore((state) => state.focusMode);
+  const toggleFocusMode = useRoomStore((state) => state.toggleFocusMode);
 
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [announceOpen, setAnnounceOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
 
   const elapsed = useMeetingTimer(meeting?.startedAt ?? null, serverOffset);
@@ -94,6 +99,49 @@ export function MeetingRoom({
     meetingClient.setHandRaised(!handRaised);
   }, [handRaised]);
 
+  /**
+   * Picture-in-picture.
+   *
+   * Puts the current speaker's video into the browser's floating window so the
+   * meeting stays visible while the user works in another tab. Audio is
+   * unaffected: it plays through the page's own audio elements, which keep
+   * running regardless of where the video is rendered.
+   *
+   * Only offered where the browser actually supports it — Firefox and iOS
+   * Safari do not expose this API, and a button that silently fails is worse
+   * than no button.
+   */
+  const enterPictureInPicture = useCallback(async () => {
+    if (!capabilities().pictureInPicture) {
+      notify('warn', 'This browser does not support picture-in-picture.');
+      return;
+    }
+
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        return;
+      }
+
+      // Pick the largest playing video, which is the speaker or the screen
+      // share rather than a thumbnail in the filmstrip.
+      const candidates = [...document.querySelectorAll('video')].filter(
+        (video) => video.readyState >= 2 && video.videoWidth > 0,
+      );
+      const target = candidates.sort((a, b) => b.videoWidth - a.videoWidth)[0];
+
+      if (!target) {
+        notify('warn', 'Nobody has their camera on yet.');
+        return;
+      }
+
+      await target.requestPictureInPicture();
+    } catch {
+      // A rejection here is usually the user dismissing the prompt.
+      notify('warn', 'Picture-in-picture could not be started.');
+    }
+  }, [notify]);
+
   const sendReaction = useCallback((reaction: ReactionKey) => {
     meetingClient.sendReaction(reaction);
   }, []);
@@ -113,6 +161,97 @@ export function MeetingRoom({
   );
 
   useKeyboardShortcuts(shortcuts, !leaveOpen && !settingsOpen && !shortcutsOpen && !shareOpen);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  /**
+   * Palette commands.
+   *
+   * Each one calls the same function its button calls, so the two can never
+   * disagree. Host-only entries are filtered out entirely rather than shown
+   * and refused — the server would refuse them anyway, but offering a command
+   * that cannot work is just a worse UI.
+   */
+  const commands = useMemo<Command[]>(() => {
+    const base: Command[] = [
+      { id: 'mic', label: micEnabled ? 'Mute myself' : 'Unmute myself', hint: 'M', run: toggleMic },
+      {
+        id: 'camera',
+        label: cameraEnabled ? 'Turn my camera off' : 'Turn my camera on',
+        hint: 'V',
+        run: toggleCamera,
+      },
+      { id: 'chat', label: 'Open chat', hint: 'C', run: () => setPanel('chat') },
+      { id: 'people', label: 'Open participants', hint: 'P', run: () => setPanel('people') },
+      { id: 'quiz', label: 'Open quiz', keywords: 'exam test', run: () => setPanel('quiz') },
+      { id: 'polls', label: 'Open polls', keywords: 'vote', run: () => setPanel('polls') },
+      {
+        id: 'share',
+        label: screenSharing ? 'Stop presenting' : 'Start screen share',
+        hint: 'S',
+        keywords: 'present screen',
+        run: toggleScreen,
+      },
+      { id: 'hand', label: handRaised ? 'Lower my hand' : 'Raise my hand', hint: 'H', run: toggleHand },
+      { id: 'focus', label: 'Toggle focus mode', keywords: 'minimal distraction', run: toggleFocusMode },
+      {
+        id: 'pip',
+        label: 'Picture-in-picture',
+        keywords: 'floating window',
+        run: () => void enterPictureInPicture(),
+      },
+      {
+        id: 'invite',
+        label: 'Copy invitation link',
+        keywords: 'share link',
+        run: () => {
+          const url = meeting?.joinUrl;
+          if (!url) return;
+          void navigator.clipboard
+            .writeText(url)
+            .then(() => notify('success', 'Meeting link copied'))
+            .catch(() => notify('warn', 'Could not copy the link'));
+        },
+      },
+      { id: 'devices', label: 'Devices and settings', run: () => setSettingsOpen(true) },
+      { id: 'shortcuts', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) },
+      { id: 'leave', label: 'Leave the meeting', run: () => setLeaveOpen(true) },
+    ];
+
+    if (!isHost) return base;
+
+    return [
+      ...base,
+      { id: 'announce', label: 'Send an announcement', run: () => setAnnounceOpen(true) },
+      { id: 'blocklist', label: 'Blocked participants', run: () => setPanel('blocklist') },
+      { id: 'mute-all', label: 'Mute everyone', run: () => void meetingClient.muteEveryone() },
+      { id: 'end', label: 'End meeting for everyone', run: () => setLeaveOpen(true) },
+    ];
+  }, [
+    micEnabled,
+    cameraEnabled,
+    screenSharing,
+    handRaised,
+    isHost,
+    meeting?.joinUrl,
+    toggleMic,
+    toggleCamera,
+    toggleScreen,
+    toggleHand,
+    toggleFocusMode,
+    enterPictureInPicture,
+    setPanel,
+    notify,
+  ]);
 
   // Escape closes the open panel — after dialogs have had their chance at it.
   useEffect(() => {
@@ -161,6 +300,7 @@ export function MeetingRoom({
   return (
     <div className="meeting-surface flex h-dvh flex-col overflow-hidden">
       {/* ------------------------------------------------------- top bar */}
+      {!focusMode && (
       <header className="safe-top flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <h1 className="truncate text-sm font-medium text-ink-100 sm:text-base">
@@ -216,6 +356,20 @@ export function MeetingRoom({
           </time>
         </div>
       </header>
+      )}
+
+      {/* Focus mode strips the interface back to the speaker and the controls;
+          this is the only way out, so it is always reachable. */}
+      {focusMode && (
+        <button
+          type="button"
+          onClick={toggleFocusMode}
+          className="safe-top absolute right-3 top-3 z-30 flex items-center gap-1.5 rounded-full bg-ink-950/80 px-3 py-1.5 text-xs font-medium text-ink-100 backdrop-blur transition-colors hover:bg-ink-950"
+        >
+          <Minimize2 className="h-3.5 w-3.5" />
+          Exit focus mode
+        </button>
+      )}
 
       {/* --------------------------------------------- reconnection banner */}
       {phase === 'reconnecting' && (
@@ -292,6 +446,8 @@ export function MeetingRoom({
         )}
       </div>
 
+      <ReactionOverlay />
+
       <NoticeStack />
 
       <ControlBar
@@ -305,6 +461,8 @@ export function MeetingRoom({
         onOpenShortcuts={() => setShortcutsOpen(true)}
         onToggleRecording={() => setRecordingOpen(true)}
         onOpenAnnounce={() => setAnnounceOpen(true)}
+        onToggleFocus={toggleFocusMode}
+        onPictureInPicture={enterPictureInPicture}
       />
 
       {/* Audio is rendered once, outside the grid, and never remounts on layout change. */}
@@ -332,6 +490,8 @@ export function MeetingRoom({
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       <AnnounceDialog open={announceOpen} onClose={() => setAnnounceOpen(false)} />
+
+      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
 
       {meeting && (
         <InviteDialog
