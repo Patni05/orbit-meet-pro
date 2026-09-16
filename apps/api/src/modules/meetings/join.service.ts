@@ -1,4 +1,5 @@
 import type { MeetingParticipant, User } from '@prisma/client';
+import { isPrivateOrigin } from '../../lib/net';
 import {
   ERROR_CODES,
   type JoinOutcome,
@@ -166,12 +167,20 @@ export async function issueTicket(
  * would fail on a certificate it has never seen.
  */
 function livekitUrlFor(requestOrigin?: string): string {
+  const configured = env.LIVEKIT_PUBLIC_URL;
+
+  // A hosted SFU is publicly reachable and already has a valid certificate, so
+  // clients go straight to it. Only a locally-run SFU needs to borrow the
+  // proxy's origin to be reachable at all.
+  if (!isPrivateOrigin(configured.replace(/^ws/, 'http'))) return configured;
+
   if (requestOrigin && env.PROXY_ORIGINS.includes(requestOrigin)) {
     // Signalling rides the origin the client already trusts; the proxy forwards
     // /livekit to the SFU. Media still goes direct, not through the proxy.
     return `${requestOrigin.replace(/^http/, 'ws')}/livekit`;
   }
-  return env.LIVEKIT_PUBLIC_URL;
+
+  return configured;
 }
 
 export async function joinMeeting(request: JoinRequest): Promise<JoinOutcome> {
