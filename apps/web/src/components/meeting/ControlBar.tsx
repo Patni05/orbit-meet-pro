@@ -3,6 +3,7 @@
 import { REACTIONS, REACTION_EMOJI, type ReactionKey } from '@orbit/shared';
 import {
   BarChart3,
+  GraduationCap,
   Circle,
   Megaphone,
   ShieldBan,
@@ -106,6 +107,7 @@ export function ControlBar(props: ControlBarProps) {
           handRaised={handRaised}
           onOpenReactions={() => setReactionsOpen(true)}
           onOpenPolls={() => setPanel('polls')}
+          onOpenQuiz={() => setPanel('quiz')}
           onOpenAnnounce={props.onOpenAnnounce}
           onOpenBlocklist={() => setPanel('blocklist')}
         />
@@ -364,6 +366,7 @@ function MoreMenu({
   handRaised,
   onOpenReactions,
   onOpenPolls,
+  onOpenQuiz,
   onOpenAnnounce,
   onOpenBlocklist,
 }: {
@@ -385,6 +388,7 @@ function MoreMenu({
   handRaised: boolean;
   onOpenReactions: () => void;
   onOpenPolls: () => void;
+  onOpenQuiz: () => void;
   onOpenAnnounce: () => void;
   onOpenBlocklist: () => void;
 }) {
@@ -525,6 +529,19 @@ function MoreMenu({
       >
         <BarChart3 className="h-4 w-4" />
         Polls
+      </button>
+
+      <button
+        type="button"
+        role="menuitem"
+        className={item}
+        onClick={() => {
+          onOpenQuiz();
+          onClose();
+        }}
+      >
+        <GraduationCap className="h-4 w-4" />
+        Quiz
       </button>
 
       <button

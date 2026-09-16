@@ -162,3 +162,61 @@ export const pollVoteSchema = z.object({
    */
   optionIds: z.array(z.string().uuid()).max(10),
 });
+
+// ---------------------------------------------------------------------------
+// Live quiz
+// ---------------------------------------------------------------------------
+
+export const quizQuestionInputSchema = z.object({
+  kind: z.enum(['SINGLE', 'MULTI', 'TRUE_FALSE']),
+  prompt: z.string().trim().min(1, 'Every question needs text.').max(500),
+  points: z.number().int().min(1).max(100).optional(),
+  seconds: z.number().int().min(5).max(600).optional(),
+  explanation: z.string().trim().max(500).nullable().optional(),
+  options: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1, 'Options cannot be blank.').max(200),
+        isCorrect: z.boolean(),
+      }),
+    )
+    .min(2, 'Each question needs at least two options.')
+    .max(8, 'Eight options is the maximum.'),
+});
+
+export const quizCreateSchema = z.object({
+  title: z.string().trim().min(1, 'Give the quiz a name.').max(150),
+  settings: z
+    .object({
+      timerMode: z.enum(['PER_QUESTION', 'TOTAL']).optional(),
+      flow: z.enum(['ONE_AT_A_TIME', 'ALL_AT_ONCE']).optional(),
+      totalSeconds: z.number().int().min(10).max(7200).optional(),
+      shuffleQuestions: z.boolean().optional(),
+      shuffleOptions: z.boolean().optional(),
+      negativeMarking: z.boolean().optional(),
+      negativePoints: z.number().int().min(0).max(50).optional(),
+      allowLateJoin: z.boolean().optional(),
+      allowAnswerChange: z.boolean().optional(),
+      resultVisibility: z
+        .enum(['LEADERBOARD_AND_ANSWERS', 'LEADERBOARD_ONLY', 'OWN_ONLY', 'HOST_ONLY'])
+        .optional(),
+      revealMode: z.enum(['AFTER_EACH_QUESTION', 'AT_END', 'NEVER']).optional(),
+    })
+    .default({}),
+  // A hard ceiling on question count keeps one request from creating hundreds
+  // of rows, and matches what a live quiz can realistically get through.
+  questions: z.array(quizQuestionInputSchema).min(1, 'Add at least one question.').max(50),
+});
+
+export const quizAnswerSchema = z.object({
+  quizId: z.string().uuid(),
+  questionId: z.string().uuid(),
+  optionIds: z.array(z.string().uuid()).max(8),
+});
+
+export const quizIdSchema = z.object({ quizId: z.string().uuid() });
+
+export const quizExtendSchema = z.object({
+  quizId: z.string().uuid(),
+  seconds: z.number().int().min(5).max(1800),
+});

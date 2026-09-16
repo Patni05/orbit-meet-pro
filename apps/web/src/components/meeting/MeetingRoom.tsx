@@ -26,6 +26,7 @@ const ChatPanel = lazy(() => import('./ChatPanel').then((m) => ({ default: m.Cha
 const PeoplePanel = lazy(() => import('./PeoplePanel').then((m) => ({ default: m.PeoplePanel })));
 const InfoPanel = lazy(() => import('./InfoPanel').then((m) => ({ default: m.InfoPanel })));
 const PollsPanel = lazy(() => import('./PollsPanel').then((m) => ({ default: m.PollsPanel })));
+const QuizPanel = lazy(() => import('./QuizPanel').then((m) => ({ default: m.QuizPanel })));
 const BlocklistPanel = lazy(() => import('./BlocklistPanel').then((m) => ({ default: m.BlocklistPanel })));
 const DiagnosticsPanel = lazy(() =>
   import('./DiagnosticsPanel').then((m) => ({ default: m.DiagnosticsPanel })),
@@ -153,7 +154,9 @@ export function MeetingRoom({
               ? 'Polls'
               : panel === 'blocklist'
                 ? 'Blocked participants'
-                : '';
+                : panel === 'quiz'
+                  ? 'Quiz'
+                  : '';
 
   return (
     <div className="meeting-surface flex h-dvh flex-col overflow-hidden">
@@ -281,6 +284,7 @@ export function MeetingRoom({
                   {panel === 'diagnostics' && <DiagnosticsPanel />}
                   {panel === 'polls' && <PollsPanel />}
                   {panel === 'blocklist' && <BlocklistPanel />}
+                  {panel === 'quiz' && <QuizPanel />}
                 </Suspense>
               </ErrorBoundary>
             </div>

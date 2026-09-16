@@ -8,6 +8,9 @@ import type {
   MeetingSummary,
   ParticipantRole,
   PollPayload,
+  QuizLiveView,
+  QuizProgress,
+  QuizResults,
   ReactionKey,
   RoomParticipant,
   WaitingParticipant,
@@ -39,7 +42,7 @@ export type ConnectionPhase =
   | 'error';
 
 export type LayoutMode = 'grid' | 'speaker';
-export type PanelId = 'chat' | 'people' | 'info' | 'diagnostics' | 'polls' | 'blocklist' | null;
+export type PanelId = 'chat' | 'people' | 'info' | 'diagnostics' | 'polls' | 'blocklist' | 'quiz' | null;
 
 export interface TrackBundle {
   camera?: Track;
@@ -114,6 +117,14 @@ interface RoomState {
   /** Polls opened since the panel was last looked at. */
   unreadPolls: number;
 
+  /** The quiz this participant is currently taking, as the server shaped it. */
+  quiz: QuizLiveView | null;
+  /** Lobby countdown before the first question. */
+  quizStarting: { quizId: string; title: string; questionCount: number; startsAt: number } | null;
+  quizResults: QuizResults | null;
+  /** Host-only: how many have joined and submitted. */
+  quizProgress: QuizProgress | null;
+
   activeSpeaker: string | null;
   presenter: string | null;
 
@@ -159,6 +170,10 @@ interface RoomState {
   setAnnouncement: (announcement: AnnouncementPayload | null) => void;
   upsertPoll: (poll: PollPayload) => void;
   setBlocklist: (entries: BlocklistEntry[]) => void;
+  setQuiz: (quiz: QuizLiveView | null) => void;
+  setQuizStarting: (payload: { quizId: string; title: string; questionCount: number; startsAt: number } | null) => void;
+  setQuizResults: (results: QuizResults | null) => void;
+  setQuizProgress: (progress: QuizProgress | null) => void;
   setLocalMedia: (patch: { mic?: boolean; camera?: boolean; screen?: boolean; blur?: boolean }) => void;
   setHandRaised: (raised: boolean) => void;
   setSelfRole: (role: ParticipantRole) => void;
@@ -210,6 +225,10 @@ const initial = {
   polls: [] as PollPayload[],
   blocklist: [] as BlocklistEntry[],
   unreadPolls: 0,
+  quiz: null as QuizLiveView | null,
+  quizStarting: null as { quizId: string; title: string; questionCount: number; startsAt: number } | null,
+  quizResults: null as QuizResults | null,
+  quizProgress: null as QuizProgress | null,
   activeSpeaker: null,
   presenter: null,
   layout: 'grid' as LayoutMode,
@@ -409,6 +428,28 @@ export const useRoomStore = create<RoomState>((set, get) => ({
 
   setBlocklist(entries) {
     set({ blocklist: entries });
+  },
+
+  setQuiz(quiz) {
+    // A running quiz takes the panel, because missing the start of a timed
+    // quiz because a different panel was open would be unfair.
+    set((state) => ({
+      quiz,
+      panel: quiz && quiz.status === 'RUNNING' ? 'quiz' : state.panel,
+      quizStarting: null,
+    }));
+  },
+
+  setQuizStarting(payload) {
+    set({ quizStarting: payload, quizResults: null, panel: payload ? 'quiz' : undefined });
+  },
+
+  setQuizResults(results) {
+    set({ quizResults: results });
+  },
+
+  setQuizProgress(progress) {
+    set({ quizProgress: progress });
   },
 
   setLocalMedia(patch) {

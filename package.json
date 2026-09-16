@@ -36,7 +36,8 @@
     "lan:off": "node scripts/lan-off.mjs",
     "tunnel": "node scripts/tunnel.mjs",
     "start": "concurrently -n api,web -c cyan,green \"npm:start:api\" \"npm:start:web\"",
-    "livekit:cloud": "node scripts/use-livekit-cloud.mjs"
+    "livekit:cloud": "node scripts/use-livekit-cloud.mjs",
+    "media:doctor": "node scripts/media-doctor.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

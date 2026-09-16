@@ -16,6 +16,9 @@ import {
   meetingSettingsSchema,
   pollCreateSchema,
   pollVoteSchema,
+  quizAnswerSchema,
+  quizCreateSchema,
+  quizExtendSchema,
   spotlightSchema,
   type Ack,
   type ClientEvents,
@@ -41,6 +44,24 @@ import {
 import { toRoomParticipant } from '../modules/meetings/join.service';
 import { blockParticipant, listBlocklist, unblock } from '../modules/meetings/blocklist.service';
 import { castVote, closePoll, createPoll, loadPoll, toPollPayload } from '../modules/meetings/polls.service';
+import {
+  advanceQuestion,
+  buildLiveView,
+  buildResults,
+  createQuiz,
+  detailedCsv,
+  endQuiz,
+  extendQuiz,
+  findExpiredQuizzes,
+  finishAttempt,
+  joinQuiz,
+  listQuizzes,
+  loadQuiz,
+  quizProgress,
+  resultsCsv,
+  startQuiz,
+  submitAnswer,
+} from '../modules/meetings/quiz.service';
 import {
   endMeeting,
   findById,
@@ -204,6 +225,110 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
       emitToParticipant(person.id, event, toPollPayload(poll, { participantId: person.id, isHost }));
     }
   }
+
+  /** Lobby countdown before the first question, so starts feel simultaneous. */
+  const QUIZ_LOBBY_MS = 3000;
+
+  /** Pending auto-end timers, keyed by quiz id. */
+  const quizTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * Sends a quiz to everyone, shaped per recipient.
+   *
+   * Each participant needs their own question order, their own saved answers,
+   * and — crucially — a payload with no answer key in it. One broadcast cannot
+   * satisfy that, so the view is built per person.
+   */
+  async function broadcastQuiz(
+    quizId: string,
+    event: 'quiz:started' | 'quiz:updated',
+  ): Promise<void> {
+    const quiz = await loadQuiz(quizId);
+    if (!quiz) return;
+
+    const participants = await prisma.meetingParticipant.findMany({
+      where: { meetingId: quiz.meetingId, status: 'ADMITTED' },
+      select: { id: true, role: true },
+    });
+
+    for (const person of participants) {
+      const isHost = person.role === 'HOST' || person.role === 'COHOST';
+      const view = await buildLiveView(quiz, { participantId: person.id, isHost });
+      emitToParticipant(person.id, event, view);
+    }
+  }
+
+  /** Host-only progress: how many joined, how many submitted. */
+  async function publishQuizProgress(quizId: string): Promise<void> {
+    const quiz = await prisma.quiz.findUnique({ where: { id: quizId }, select: { meetingId: true } });
+    if (!quiz) return;
+    nsp.to(hostsRoom(quiz.meetingId)).emit('quiz:progress', await quizProgress(quizId));
+  }
+
+  /**
+   * Ends a quiz, grades every outstanding attempt, and publishes results.
+   *
+   * Results are built per viewer because the host's visibility setting decides
+   * whether a participant receives the leaderboard, only their own row, or
+   * nothing at all.
+   */
+  async function finishQuizAndPublish(quizId: string): Promise<void> {
+    clearTimeout(quizTimers.get(quizId));
+    quizTimers.delete(quizId);
+
+    const ended = await endQuiz(quizId);
+    if (!ended) return;
+
+    nsp.to(meetingRoom(ended.meetingId)).emit('quiz:ended', { quizId });
+
+    const participants = await prisma.meetingParticipant.findMany({
+      where: { meetingId: ended.meetingId, status: 'ADMITTED' },
+      select: { id: true, role: true },
+    });
+
+    for (const person of participants) {
+      const isHost = person.role === 'HOST' || person.role === 'COHOST';
+      if (ended.resultVisibility === 'HOST_ONLY' && !isHost) continue;
+
+      const results = await buildResults(quizId, { participantId: person.id, isHost });
+      if (results) emitToParticipant(person.id, 'quiz:results', results);
+    }
+
+    logger.info({ quizId, meetingId: ended.meetingId }, 'quiz ended and graded');
+  }
+
+  /**
+   * Arms the server-side deadline.
+   *
+   * The quiz must end on time even if every participant has closed their
+   * laptop, so the authority is a timer here rather than a countdown in a
+   * browser. A missed timer — a restart, say — is caught by the periodic sweep
+   * below.
+   */
+  function scheduleQuizExpiry(quizId: string, endsAt: Date | null): void {
+    clearTimeout(quizTimers.get(quizId));
+    if (!endsAt) return;
+
+    const delay = Math.max(0, endsAt.getTime() - Date.now());
+    const timer = setTimeout(() => {
+      void finishQuizAndPublish(quizId);
+    }, delay);
+    timer.unref();
+    quizTimers.set(quizId, timer);
+  }
+
+  /**
+   * Safety net for quizzes whose in-process timer was lost — after a restart,
+   * or when the timer was armed on a different API instance.
+   */
+  const quizSweep = setInterval(() => {
+    void (async () => {
+      for (const quiz of await findExpiredQuizzes().catch(() => [])) {
+        if (!quizTimers.has(quiz.id)) await finishQuizAndPublish(quiz.id);
+      }
+    })();
+  }, 15_000);
+  quizSweep.unref();
 
   async function refreshWaitingList(meeting: MeetingWithHost): Promise<void> {
     const rows = await prisma.meetingParticipant.findMany({
@@ -1195,6 +1320,288 @@ export async function createRealtime(httpServer: HttpServer): Promise<RealtimeGa
             isHost: ctx.participant.role === 'HOST' || ctx.participant.role === 'COHOST',
           }),
         );
+      });
+
+      // ------------------------------------------------------------- quiz
+
+      socket.on('host:quiz-create', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can create a quiz.');
+
+        const parsed = quizCreateSchema.safeParse(payload);
+        if (!parsed.success) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, parsed.error.issues[0]?.message ?? 'Invalid quiz.');
+        }
+
+        // Every question must have a usable answer key, or grading is a lie.
+        for (const [index, question] of parsed.data.questions.entries()) {
+          const correct = question.options.filter((option) => option.isCorrect).length;
+          if (correct === 0) {
+            return ackErr(ack, ERROR_CODES.VALIDATION, `Question ${index + 1} has no correct answer.`);
+          }
+          if (question.kind !== 'MULTI' && correct > 1) {
+            return ackErr(
+              ack,
+              ERROR_CODES.VALIDATION,
+              `Question ${index + 1} is single-choice but marks several answers correct.`,
+            );
+          }
+        }
+
+        const hostUserId = host.participant.userId;
+        if (!hostUserId) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only a signed-in host can create a quiz.');
+        }
+
+        const quiz = await createQuiz({
+          meetingId,
+          createdById: hostUserId,
+          title: sanitizeText(parsed.data.title),
+          settings: parsed.data.settings,
+          questions: parsed.data.questions.map((question) => ({
+            ...question,
+            prompt: sanitizeText(question.prompt),
+            explanation: question.explanation ? sanitizeText(question.explanation) : null,
+            options: question.options.map((option) => ({
+              label: sanitizeText(option.label),
+              isCorrect: option.isCorrect,
+            })),
+          })),
+        });
+
+        if (!quiz) return ackErr(ack, ERROR_CODES.INTERNAL, 'The quiz could not be created.');
+        ackOk(ack, { quizId: quiz.id });
+      });
+
+      socket.on('host:quiz-start', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can start a quiz.');
+
+        const existing = await loadQuiz(payload.quizId);
+        if (!existing || existing.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz no longer exists.');
+        }
+        if (existing.status !== 'DRAFT') {
+          return ackErr(ack, ERROR_CODES.VALIDATION, 'That quiz has already run.');
+        }
+
+        // A short lobby countdown, so everybody's first question appears at
+        // roughly the same moment rather than whenever their socket woke up.
+        nsp.to(meetingRoom(meetingId)).emit('quiz:starting', {
+          quizId: existing.id,
+          title: existing.title,
+          questionCount: existing.questions.length,
+          startsInMs: QUIZ_LOBBY_MS,
+        });
+
+        setTimeout(() => {
+          void (async () => {
+            const started = await startQuiz(payload.quizId);
+            if (!started) return;
+            await broadcastQuiz(started.id, 'quiz:started');
+            scheduleQuizExpiry(started.id, started.endsAt);
+          })();
+        }, QUIZ_LOBBY_MS);
+
+        const view = await buildLiveView(existing, {
+          participantId: host.participant.id,
+          isHost: true,
+        });
+        ackOk(ack, view);
+      });
+
+      socket.on('host:quiz-next', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const result = await advanceQuestion(payload.quizId);
+        if (!result) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz is not running.');
+
+        if (result.finished) {
+          await finishQuizAndPublish(payload.quizId);
+        } else {
+          await broadcastQuiz(payload.quizId, 'quiz:updated');
+        }
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:quiz-extend', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const parsed = quizExtendSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid request.');
+
+        const extended = await extendQuiz(parsed.data.quizId, parsed.data.seconds);
+        if (!extended) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz is not running.');
+
+        // One deadline, changed once, broadcast to everyone — nobody gets a
+        // different amount of extra time.
+        await broadcastQuiz(extended.id, 'quiz:updated');
+        scheduleQuizExpiry(extended.id, extended.endsAt);
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:quiz-end', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+
+        const existing = await loadQuiz(payload.quizId);
+        if (!existing || existing.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz no longer exists.');
+        }
+
+        await finishQuizAndPublish(payload.quizId);
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('host:quiz-list', async (_payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can do that.');
+        ackOk(ack, await listQuizzes(meetingId));
+      });
+
+      socket.on('host:quiz-export', async (payload, ack) => {
+        const host = await requireHost(socket);
+        if (!host) return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Only hosts can export results.');
+
+        const existing = await loadQuiz(payload.quizId);
+        if (!existing || existing.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz no longer exists.');
+        }
+
+        const csv = payload.detailed
+          ? await detailedCsv(payload.quizId)
+          : await resultsCsv(payload.quizId);
+
+        const safeTitle = existing.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40);
+        ackOk(ack, {
+          filename: `${safeTitle || 'quiz'}-${payload.detailed ? 'detailed' : 'results'}.csv`,
+          csv,
+        });
+      });
+
+      // ---- participant side ----
+
+      socket.on('quiz:join', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const quiz = await loadQuiz(payload.quizId);
+        if (!quiz || quiz.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz no longer exists.');
+        }
+
+        const joined = await joinQuiz({
+          quizId: payload.quizId,
+          participantId: ctx.participant.id,
+          displayName: ctx.participant.displayName,
+          avatarUrl: ctx.participant.avatarUrl,
+        });
+
+        if (!joined.ok) {
+          return ackErr(
+            ack,
+            ERROR_CODES.VALIDATION,
+            joined.code === 'LATE_JOIN_CLOSED'
+              ? 'This quiz is closed to late entries.'
+              : 'That quiz is not running.',
+          );
+        }
+
+        const isHost = ctx.participant.role === 'HOST' || ctx.participant.role === 'COHOST';
+        ackOk(ack, await buildLiveView(quiz, { participantId: ctx.participant.id, isHost }));
+        await publishQuizProgress(payload.quizId);
+      });
+
+      socket.on('quiz:answer', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const parsed = quizAnswerSchema.safeParse(payload);
+        if (!parsed.success) return ackErr(ack, ERROR_CODES.VALIDATION, 'Invalid answer.');
+
+        // Answer submission is rate limited: a quiz is a small, hot target and
+        // each answer is a write.
+        const rate = await bumpCounter('quiz-answer', ctx.participant.id, 60);
+        if (rate > 120) return ackErr(ack, ERROR_CODES.RATE_LIMITED, 'Slow down a moment.');
+
+        const result = await submitAnswer({
+          quizId: parsed.data.quizId,
+          participantId: ctx.participant.id,
+          questionId: parsed.data.questionId,
+          optionIds: parsed.data.optionIds,
+        });
+
+        if (!result.ok) {
+          const message =
+            result.code === 'EXPIRED'
+              ? 'Time is up for that question.'
+              : result.code === 'ALREADY_SUBMITTED'
+                ? 'You have already submitted this quiz.'
+                : result.code === 'LOCKED'
+                  ? 'Answers cannot be changed in this quiz.'
+                  : result.code === 'NOT_OPEN'
+                    ? 'That question is not open.'
+                    : 'That answer could not be recorded.';
+          return ackErr(ack, ERROR_CODES.VALIDATION, message);
+        }
+
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('quiz:submit', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const finished = await finishAttempt(payload.quizId, ctx.participant.id);
+        if (!finished) {
+          return ackErr(ack, ERROR_CODES.VALIDATION, 'You have already submitted this quiz.');
+        }
+
+        await publishQuizProgress(payload.quizId);
+        ackOk(ack, undefined as never);
+      });
+
+      socket.on('quiz:results', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'You are no longer in this meeting.');
+
+        const quiz = await loadQuiz(payload.quizId);
+        if (!quiz || quiz.meetingId !== meetingId) {
+          return ackErr(ack, ERROR_CODES.NOT_FOUND, 'That quiz no longer exists.');
+        }
+
+        const isHost = ctx.participant.role === 'HOST' || ctx.participant.role === 'COHOST';
+
+        // Results stay closed until the quiz ends, whatever the client asks.
+        if (quiz.status !== 'ENDED' && !isHost) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'Results are not available yet.');
+        }
+        if (quiz.resultVisibility === 'HOST_ONLY' && !isHost) {
+          return ackErr(ack, ERROR_CODES.FORBIDDEN, 'The host is keeping these results private.');
+        }
+
+        const results = await buildResults(payload.quizId, {
+          participantId: ctx.participant.id,
+          isHost,
+        });
+        if (!results) return ackErr(ack, ERROR_CODES.NOT_FOUND, 'Results are not available.');
+        ackOk(ack, results);
+      });
+
+      socket.on('quiz:away', async (payload, ack) => {
+        const ctx = await loadContext(socket);
+        if (!ctx) return;
+        // Recorded as a plain count and never acted on automatically. It is a
+        // note for the host, not an accusation.
+        await prisma.quizParticipant
+          .updateMany({
+            where: { quizId: payload.quizId, participantId: ctx.participant.id },
+            data: { awayCount: { increment: 1 } },
+          })
+          .catch(() => undefined);
+        ackOk(ack, undefined as never);
       });
 
       socket.on('ping:rt', (_payload, ack) => {

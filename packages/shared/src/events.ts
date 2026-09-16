@@ -5,6 +5,10 @@ import type {
   MeetingSettings,
   ParticipantRole,
   PollPayload,
+  QuizLiveView,
+  QuizProgress,
+  QuizResults,
+  QuizSummary,
   ReactionEvent,
   RoomParticipant,
   RoomState,
@@ -84,6 +88,16 @@ export interface ServerEvents {
   'poll:opened': (poll: PollPayload) => void;
   'poll:updated': (poll: PollPayload) => void;
   'poll:closed': (poll: PollPayload) => void;
+
+  /** A quiz is about to begin; clients show a countdown. */
+  'quiz:starting': (payload: { quizId: string; title: string; questionCount: number; startsInMs: number }) => void;
+  'quiz:started': (view: QuizLiveView) => void;
+  /** Sent when the host advances a one-at-a-time quiz, or extends the clock. */
+  'quiz:updated': (view: QuizLiveView) => void;
+  'quiz:ended': (payload: { quizId: string }) => void;
+  'quiz:results': (results: QuizResults) => void;
+  /** Host-only live progress while a quiz runs. */
+  'quiz:progress': (progress: QuizProgress) => void;
 }
 
 /** Acks report authorization failures instead of silently dropping the action. */
@@ -140,6 +154,21 @@ export interface ClientEvents {
   ) => void;
   'host:poll-close': (payload: { pollId: string }, ack?: Ack<PollPayload>) => void;
   'poll:vote': (payload: { pollId: string; optionIds: string[] }, ack?: Ack<PollPayload>) => void;
+
+  'host:quiz-create': (payload: unknown, ack?: Ack<{ quizId: string }>) => void;
+  'host:quiz-start': (payload: { quizId: string }, ack?: Ack<QuizLiveView>) => void;
+  'host:quiz-next': (payload: { quizId: string }, ack?: Ack) => void;
+  'host:quiz-extend': (payload: { quizId: string; seconds: number }, ack?: Ack) => void;
+  'host:quiz-end': (payload: { quizId: string }, ack?: Ack) => void;
+  'host:quiz-list': (payload: Record<string, never>, ack?: Ack<QuizSummary[]>) => void;
+  'host:quiz-export': (payload: { quizId: string; detailed?: boolean }, ack?: Ack<{ filename: string; csv: string }>) => void;
+
+  'quiz:join': (payload: { quizId: string }, ack?: Ack<QuizLiveView>) => void;
+  'quiz:answer': (payload: { quizId: string; questionId: string; optionIds: string[] }, ack?: Ack) => void;
+  'quiz:submit': (payload: { quizId: string }, ack?: Ack) => void;
+  'quiz:results': (payload: { quizId: string }, ack?: Ack<QuizResults>) => void;
+  /** Informational only: how often the tab lost focus during the quiz. */
+  'quiz:away': (payload: { quizId: string }, ack?: Ack) => void;
 
   'ping:rt': (payload: Record<string, never>, ack?: Ack<{ serverTime: string }>) => void;
 }

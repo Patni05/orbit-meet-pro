@@ -358,6 +358,30 @@ class MeetingClient {
       });
     });
 
+    socket.on('quiz:starting', ({ quizId, title, questionCount, startsInMs }) => {
+      this.store.setQuizStarting({ quizId, title, questionCount, startsAt: Date.now() + startsInMs });
+    });
+
+    socket.on('quiz:started', (view) => {
+      this.store.setQuiz(view);
+    });
+
+    socket.on('quiz:updated', (view) => {
+      this.store.setQuiz(view);
+    });
+
+    socket.on('quiz:ended', () => {
+      this.store.notify('info', 'The quiz has ended');
+    });
+
+    socket.on('quiz:results', (results) => {
+      this.store.setQuizResults(results);
+    });
+
+    socket.on('quiz:progress', (progress) => {
+      this.store.setQuizProgress(progress);
+    });
+
     socket.on('poll:opened', (poll) => {
       this.store.upsertPoll(poll);
       this.store.notify('info', 'A poll has opened');
@@ -691,6 +715,27 @@ class MeetingClient {
   }) => this.hostAction('host:poll-create', payload);
 
   closePoll = (pollId: string) => this.hostAction('host:poll-close', { pollId });
+
+  // ------------------------------------------------------------------- quiz
+
+  createQuiz = (payload: unknown) =>
+    this.request<{ quizId: string }>('host:quiz-create', payload);
+  startQuiz = (quizId: string) => this.hostAction('host:quiz-start', { quizId });
+  nextQuizQuestion = (quizId: string) => this.hostAction('host:quiz-next', { quizId });
+  extendQuiz = (quizId: string, seconds: number) =>
+    this.hostAction('host:quiz-extend', { quizId, seconds });
+  endQuiz = (quizId: string) => this.hostAction('host:quiz-end', { quizId });
+  listQuizzes = () => this.request<unknown[]>('host:quiz-list', {});
+  exportQuiz = (quizId: string, detailed = false) =>
+    this.request<{ filename: string; csv: string }>('host:quiz-export', { quizId, detailed });
+
+  /** Participant side. Answering is open to everyone, so not a host action. */
+  joinQuiz = (quizId: string) => this.request<unknown>('quiz:join', { quizId });
+  answerQuiz = (quizId: string, questionId: string, optionIds: string[]) =>
+    this.request('quiz:answer', { quizId, questionId, optionIds });
+  submitQuiz = (quizId: string) => this.request('quiz:submit', { quizId });
+  fetchQuizResults = (quizId: string) => this.request<unknown>('quiz:results', { quizId });
+  reportQuizAway = (quizId: string) => this.request('quiz:away', { quizId });
 
   /** Voting is open to everyone, so it is not a host action. */
   vote = (pollId: string, optionIds: string[]) =>

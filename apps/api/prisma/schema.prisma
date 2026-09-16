@@ -77,6 +77,7 @@ model User {
   blocksIssued        MeetingBlocklistEntry[] @relation("BlockedByUser")
   announcements       MeetingAnnouncement[]
   pollsCreated        Poll[]
+  quizzesCreated      Quiz[]
 }
 
 /// Rotating refresh tokens. Only the SHA-256 hash of the token is stored.
@@ -159,6 +160,7 @@ model Meeting {
   blocklist    MeetingBlocklistEntry[]
   announcements MeetingAnnouncement[]
   polls        Poll[]
+  quizzes      Quiz[]
 
   @@index([hostId, status])
   @@index([scheduledAt])
@@ -197,6 +199,7 @@ model MeetingParticipant {
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   pollVotes PollVote[]
+  quizAttempts QuizParticipant[]
 
   @@unique([meetingId, identity])
   @@index([meetingId, status])
@@ -399,4 +402,179 @@ model PollVote {
   /// duplicates, and a re-vote replaces rather than stacking.
   @@unique([pollId, participantId, optionId])
   @@index([pollId])
+}
+
+// ---------------------------------------------------------------------------
+// Live quiz / exam
+// ---------------------------------------------------------------------------
+//
+// Separate from Poll on purpose. A poll collects opinions and has no wrong
+// answer; a quiz has an answer key, a server-held clock, scoring and a
+// ranking. Sharing one model would mean either polls carrying dead scoring
+// columns or quizzes storing their answer key somewhere untyped.
+
+enum QuizStatus {
+  DRAFT
+  RUNNING
+  ENDED
+}
+
+enum QuizTimerMode {
+  /// Each question carries its own countdown.
+  PER_QUESTION
+  /// One clock for the whole quiz.
+  TOTAL
+}
+
+enum QuizFlow {
+  /// The host advances everyone together.
+  ONE_AT_A_TIME
+  /// Participants navigate freely until they submit or time runs out.
+  ALL_AT_ONCE
+}
+
+enum QuizQuestionKind {
+  SINGLE
+  MULTI
+  TRUE_FALSE
+}
+
+enum QuizResultVisibility {
+  LEADERBOARD_AND_ANSWERS
+  LEADERBOARD_ONLY
+  OWN_ONLY
+  HOST_ONLY
+}
+
+enum QuizRevealMode {
+  AFTER_EACH_QUESTION
+  AT_END
+  NEVER
+}
+
+model Quiz {
+  id        String     @id @default(uuid())
+  meetingId String
+  title     String
+  status    QuizStatus @default(DRAFT)
+
+  timerMode QuizTimerMode @default(TOTAL)
+  flow      QuizFlow      @default(ALL_AT_ONCE)
+  /// Used when timerMode is TOTAL.
+  totalSeconds Int        @default(300)
+
+  shuffleQuestions Boolean @default(false)
+  shuffleOptions   Boolean @default(false)
+
+  /// Off by default, and participants are told before they start when it is on.
+  negativeMarking Boolean @default(false)
+  negativePoints  Int     @default(1)
+
+  allowLateJoin     Boolean @default(true)
+  allowAnswerChange Boolean @default(false)
+
+  resultVisibility QuizResultVisibility @default(LEADERBOARD_AND_ANSWERS)
+  revealMode       QuizRevealMode       @default(AT_END)
+
+  createdById String
+  createdAt   DateTime  @default(now())
+
+  /// The authoritative clock. Clients render a countdown from these instants
+  /// rather than running their own timer, so a refresh cannot buy more time.
+  startedAt DateTime?
+  endsAt    DateTime?
+  endedAt   DateTime?
+
+  /// For ONE_AT_A_TIME flow: which question is currently open.
+  currentQuestionIndex Int      @default(0)
+  currentQuestionEndsAt DateTime?
+
+  meeting      Meeting           @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  createdBy    User              @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  questions    QuizQuestion[]
+  participants QuizParticipant[]
+
+  @@index([meetingId, status])
+}
+
+model QuizQuestion {
+  id       String           @id @default(uuid())
+  quizId   String
+  position Int
+  kind     QuizQuestionKind @default(SINGLE)
+  prompt   String
+  points   Int              @default(10)
+  /// Used when timerMode is PER_QUESTION.
+  seconds  Int              @default(30)
+  /// Shown after the answer is revealed, for teaching.
+  explanation String?
+
+  quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options QuizOption[]
+  answers QuizAnswer[]
+
+  @@index([quizId, position])
+}
+
+model QuizOption {
+  id         String  @id @default(uuid())
+  questionId String
+  position   Int
+  label      String
+  /// Never serialised to a participant before the configured reveal point.
+  isCorrect  Boolean @default(false)
+
+  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId, position])
+}
+
+/// One person's attempt. The unique constraint is what makes a second
+/// submission impossible, including from a second browser tab.
+model QuizParticipant {
+  id            String @id @default(uuid())
+  quizId        String
+  participantId String
+  displayName   String
+  avatarUrl     String?
+
+  startedAt   DateTime  @default(now())
+  submittedAt DateTime?
+
+  /// Populated by the server at grading time. Never accepted from a client.
+  score            Int   @default(0)
+  correctCount     Int   @default(0)
+  wrongCount       Int   @default(0)
+  unansweredCount  Int   @default(0)
+  timeTakenMs      Int   @default(0)
+
+  /// Informational only, never used to accuse anyone of anything.
+  awayCount Int @default(0)
+
+  quiz        Quiz               @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  participant MeetingParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  answers     QuizAnswer[]
+
+  @@unique([quizId, participantId])
+  @@index([quizId, score])
+}
+
+model QuizAnswer {
+  id                String   @id @default(uuid())
+  quizParticipantId String
+  questionId        String
+  /// Selected option ids. An empty array is a deliberate "no answer".
+  optionIds         String[]
+  answeredAt        DateTime @default(now())
+
+  /// Graded server-side once the quiz ends.
+  isCorrect Boolean @default(false)
+  awarded   Int     @default(0)
+
+  quizParticipant QuizParticipant @relation(fields: [quizParticipantId], references: [id], onDelete: Cascade)
+  question        QuizQuestion    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  /// One answer row per question per attempt; re-answering updates in place.
+  @@unique([quizParticipantId, questionId])
+  @@index([questionId])
 }

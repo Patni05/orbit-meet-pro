@@ -252,3 +252,159 @@ export interface PollPayload {
   createdAt: string;
   closedAt: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Live quiz / exam
+// ---------------------------------------------------------------------------
+
+export type QuizStatus = 'DRAFT' | 'RUNNING' | 'ENDED';
+export type QuizTimerMode = 'PER_QUESTION' | 'TOTAL';
+export type QuizFlow = 'ONE_AT_A_TIME' | 'ALL_AT_ONCE';
+export type QuizQuestionKind = 'SINGLE' | 'MULTI' | 'TRUE_FALSE';
+export type QuizResultVisibility =
+  | 'LEADERBOARD_AND_ANSWERS'
+  | 'LEADERBOARD_ONLY'
+  | 'OWN_ONLY'
+  | 'HOST_ONLY';
+export type QuizRevealMode = 'AFTER_EACH_QUESTION' | 'AT_END' | 'NEVER';
+
+export interface QuizSettings {
+  timerMode: QuizTimerMode;
+  flow: QuizFlow;
+  totalSeconds: number;
+  shuffleQuestions: boolean;
+  shuffleOptions: boolean;
+  negativeMarking: boolean;
+  negativePoints: number;
+  allowLateJoin: boolean;
+  allowAnswerChange: boolean;
+  resultVisibility: QuizResultVisibility;
+  revealMode: QuizRevealMode;
+}
+
+/** An option as a participant sees it: no correctness flag. */
+export interface QuizOptionView {
+  id: string;
+  label: string;
+}
+
+/** An option as the host sees it, or as everyone sees it after the reveal. */
+export interface QuizOptionKeyed extends QuizOptionView {
+  isCorrect: boolean;
+}
+
+export interface QuizQuestionView {
+  id: string;
+  position: number;
+  kind: QuizQuestionKind;
+  prompt: string;
+  points: number;
+  seconds: number;
+  options: QuizOptionView[];
+  /**
+   * Present only once the quiz's reveal rules allow it. Its absence is the
+   * mechanism, not a UI choice — the answer key is simply not in the payload.
+   */
+  correctOptionIds?: string[];
+  explanation?: string | null;
+}
+
+/** What a participant taking the quiz receives. */
+export interface QuizLiveView {
+  id: string;
+  title: string;
+  status: QuizStatus;
+  settings: QuizSettings;
+  questionCount: number;
+  totalPoints: number;
+
+  /** Server instants. Clients derive a countdown from these, never their own. */
+  startedAt: string | null;
+  endsAt: string | null;
+  serverTime: string;
+
+  /** For ONE_AT_A_TIME flow. */
+  currentQuestionIndex: number;
+  currentQuestionEndsAt: string | null;
+
+  /** Questions this participant may currently see, in their own order. */
+  questions: QuizQuestionView[];
+  /** This participant's own saved answers, so a refresh restores them. */
+  myAnswers: Record<string, string[]>;
+  mySubmittedAt: string | null;
+}
+
+export interface QuizScoreRow {
+  rank: number;
+  participantId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  score: number;
+  correctCount: number;
+  wrongCount: number;
+  unansweredCount: number;
+  accuracy: number;
+  timeTakenMs: number;
+  submittedAt: string | null;
+}
+
+export interface QuizQuestionAnalytics {
+  questionId: string;
+  position: number;
+  prompt: string;
+  correctOptionIds: string[];
+  explanation: string | null;
+  /** How many chose each option. */
+  optionCounts: { optionId: string; label: string; count: number }[];
+  correctCount: number;
+  totalAnswered: number;
+  accuracy: number;
+  averageResponseMs: number;
+}
+
+export interface QuizResults {
+  quizId: string;
+  title: string;
+  status: QuizStatus;
+  endedAt: string | null;
+  participantCount: number;
+  questionCount: number;
+  totalResponses: number;
+  correctResponses: number;
+  wrongResponses: number;
+  unansweredResponses: number;
+  averageScore: number;
+  averageAccuracy: number;
+  highestScore: number;
+  lowestScore: number;
+  averageCompletionMs: number;
+  easiest: { position: number; prompt: string; accuracy: number } | null;
+  hardest: { position: number; prompt: string; accuracy: number } | null;
+  leaderboard: QuizScoreRow[];
+  /** Host-only, and omitted entirely when the visibility rules forbid it. */
+  questions?: QuizQuestionAnalytics[];
+  /** The viewer's own row, always included when they took part. */
+  me: QuizScoreRow | null;
+}
+
+/** Live progress, for the host while a quiz runs. */
+export interface QuizProgress {
+  quizId: string;
+  joined: number;
+  submitted: number;
+  /** Deliberately no per-option breakdown: a host watching answers arrive
+   *  could steer the room. */
+}
+
+/** A row in the meeting's quiz history. */
+export interface QuizSummary {
+  id: string;
+  title: string;
+  status: QuizStatus;
+  questionCount: number;
+  participantCount: number;
+  averageScore: number;
+  topName: string | null;
+  createdAt: string;
+  endedAt: string | null;
+}
