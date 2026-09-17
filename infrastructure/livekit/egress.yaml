@@ -1,10 +1,24 @@
 # LiveKit Egress — server-side recording.
 #
-# Started only with:  docker compose --profile recording up -d egress
-# Files land in ./recordings on the host.
+# Reference only. The running configuration is NOT this file: docker-compose
+# passes it through EGRESS_CONFIG_BODY so the API key and secret come from
+# .env, the same place the livekit service reads them.
+#
+# This file used to be mounted into the container with `devkey` baked in. That
+# is the placeholder livekit.yaml carries, and the compose file overrides it
+# for the server via LIVEKIT_KEYS — so the server accepted the real key while
+# egress kept presenting `devkey`, was rejected with "invalid API key", and
+# every recording failed before it captured a frame. Keeping credentials in
+# one place is what stops that recurring.
+#
+# Start the recorder with:
+#   docker compose --profile recording up -d egress
+#
+# Files land in ./recordings on the host, which the container sees as
+# /recordings — see RECORDING_OUTPUT_DIR and RECORDING_LOCAL_DIR in .env.
 
-api_key: devkey
-api_secret: devsecretdevsecretdevsecretdevsecret
+api_key: ${LIVEKIT_API_KEY}
+api_secret: ${LIVEKIT_API_SECRET}
 ws_url: ws://livekit:7880
 
 redis:

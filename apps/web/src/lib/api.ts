@@ -299,8 +299,22 @@ export async function downloadAuthenticated(path: string, suggestedName?: string
   anchor.download = filename;
   document.body.appendChild(anchor);
   anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
+
+  /*
+   * The anchor and the blob URL are both torn down later, not now.
+   *
+   * `click()` only *schedules* the download; the browser reads the blob
+   * afterwards. Removing the element or revoking the URL on the next line
+   * pulls the data out from under it and the save is silently cancelled —
+   * nothing throws, no error appears, the file simply never arrives. A
+   * timeout keeps both alive long enough for the browser to take the data,
+   * and still releases them rather than leaking a whole recording for the
+   * life of the tab.
+   */
+  setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
 }
 
 // ------------------------------------------------------------------ endpoints

@@ -269,6 +269,24 @@ export async function startRoomRecording(params: {
     };
   } catch (error) {
     logger.error({ err: error, meetingId: params.meetingId }, 'failed to start egress');
+
+    /*
+     * "The room does not exist" is not a broken recorder.
+     *
+     * The SFU only creates a room once somebody actually connects to it, so a
+     * host who presses Record before anyone has joined — including before
+     * their own media has connected — gets this. Reporting it as a service
+     * outage sends them looking for a problem with the server when all they
+     * need to do is wait a moment, so it is answered plainly instead.
+     */
+    const message = error instanceof Error ? error.message : String(error);
+    if (/room does not exist/i.test(message)) {
+      throw serviceUnavailable(
+        ERROR_CODES.RECORDING_UNAVAILABLE,
+        'Nobody has joined this meeting yet, so there is nothing to record. Try again once the meeting is running.',
+      );
+    }
+
     throw serviceUnavailable(
       ERROR_CODES.RECORDING_UNAVAILABLE,
       'The recording service is unavailable right now.',

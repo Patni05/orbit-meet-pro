@@ -24,3 +24,14 @@ for (const path of candidates) {
     loadDotenv({ path, override: false });
   }
 }
+
+/**
+ * The repository root.
+ *
+ * Relative paths in configuration are resolved against this rather than
+ * `process.cwd()`. The API is started from `apps/api`, so a perfectly
+ * reasonable `./recordings` in the root `.env` would otherwise point at
+ * `apps/api/recordings` — a directory that does not exist, producing a
+ * recording the server insists is not on this server.
+ */
+export const REPO_ROOT = resolve(__dirname, '../../../..');

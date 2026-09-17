@@ -74,7 +74,29 @@ const schema = z.object({
   TURN_PASSWORD: z.string().optional(),
 
   RECORDING_ENABLED: booleanish.default(false),
+
+  /**
+   * Where the egress worker writes finished recordings.
+   *
+   * This is a path *inside the egress container*, because that is the process
+   * doing the writing. It is handed to LiveKit verbatim.
+   */
   RECORDING_OUTPUT_DIR: z.string().default('/recordings'),
+
+  /**
+   * Where this API reads those same files from.
+   *
+   * Deliberately separate from `RECORDING_OUTPUT_DIR`. The API runs on the
+   * host while egress runs in a container, so the two see the same file at two
+   * different paths — the compose file maps `./recordings` to `/recordings`.
+   * Resolving the container path on the host is how a finished recording ended
+   * up with no size and a download that could not find it: on Windows
+   * `path.resolve('/recordings')` is the *drive root*, not the project folder.
+   *
+   * Left empty when the API itself runs in a container sharing the volume, in
+   * which case the two paths are the same and this falls back to the other.
+   */
+  RECORDING_LOCAL_DIR: z.string().optional(),
 
   RATE_LIMIT_MAX: z.coerce.number().int().min(10).default(300),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),

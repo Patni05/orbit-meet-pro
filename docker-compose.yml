@@ -97,9 +97,28 @@ services:
     restart: unless-stopped
     profiles: ['recording']
     environment:
-      EGRESS_CONFIG_FILE: /etc/egress.yaml
+      # Credentials come from .env, exactly as they do for the livekit service.
+      #
+      # The config cannot be a mounted file here: egress does no substitution
+      # inside the YAML, so a file would have to contain the real key and
+      # secret — which is both a secret in the repo and, when the key is
+      # rotated in .env and not in the file, an egress that authenticates as
+      # nobody. It fails with "invalid API key", the recording never starts,
+      # and the meeting simply never produces a file. Passing the body through
+      # the environment keeps one source of truth.
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ws://livekit:7880
+        redis:
+          address: redis:6379
+        file_output:
+          local: true
+        log_level: info
+        health_port: 9090
+        cpu_cost:
+          room_composite_cpu_cost: 2
     volumes:
-      - ./infrastructure/livekit/egress.yaml:/etc/egress.yaml:ro
       - ./recordings:/recordings
     # Chromium inside egress needs a larger shared memory segment.
     shm_size: 1gb
