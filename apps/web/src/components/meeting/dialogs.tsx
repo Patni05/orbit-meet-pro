@@ -235,18 +235,60 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
  * Recording is never silent: the host must confirm, and every participant is
  * told the moment it starts.
  */
+/**
+ * Start or stop a recording.
+ *
+ * Two things this has to get right, both of which it previously did not.
+ *
+ * It waits for the server. The confirm used to fire the request and close the
+ * dialog on the next line, so a refusal — recording switched off for this
+ * meeting, the room not started yet, the worker missing — closed the dialog
+ * and left the host looking at a meeting that was not recording, with nothing
+ * explaining why. The dialog now stays open and says what happened.
+ *
+ * It offers the switch it is blocked by. Recording is off per meeting by
+ * default, and the only way to change that was a toggle buried in the meeting
+ * information panel; the menu entry was simply dead. The owner can now turn it
+ * on from here, which is where they find out they need to.
+ */
 export function RecordingDialog({
   open,
   active,
+  allowed,
+  canAllow,
   onClose,
   onConfirm,
+  onAllow,
 }: {
   open: boolean;
   active: boolean;
+  /** Whether this meeting permits recording at all. */
+  allowed: boolean;
+  /** Whether this viewer may change that — the meeting's owner. */
+  canAllow: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => Promise<{ ok: boolean; message?: string }>;
+  onAllow: () => Promise<{ ok: boolean; message?: string }>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // A fresh attempt should not open showing the last one's failure.
+  useEffect(() => {
+    if (open) setError(null);
+  }, [open]);
+
+  async function run(action: () => Promise<{ ok: boolean; message?: string }>) {
+    setBusy(true);
+    setError(null);
+    const result = await action();
+    setBusy(false);
+
+    if (result.ok) onClose();
+    else setError(result.message ?? 'That did not work. Please try again.');
+  }
+
+  const blocked = !active && !allowed;
 
   return (
     <Modal
@@ -257,33 +299,46 @@ export function RecordingDialog({
       description={
         active
           ? 'The recording will be finalised and saved.'
-          : 'Everyone in the meeting will be told that recording has started.'
+          : 'Audio only. Everyone in the meeting will be told that recording has started.'
       }
     >
-      {!active && (
-        <Alert tone="warning" title="Let people know">
-          Make sure everyone is comfortable being recorded. Depending on where participants are, their
-          consent may be legally required.
+      {error && (
+        <div className="mb-3">
+          <Alert tone="error">{error}</Alert>
+        </div>
+      )}
+
+      {blocked ? (
+        <Alert tone="info" title="Recording is off for this meeting">
+          {canAllow
+            ? 'Turn it on to record. You can switch it off again at any time.'
+            : 'Only the meeting’s host can turn recording on.'}
         </Alert>
+      ) : (
+        !active && (
+          <Alert tone="warning" title="Let people know">
+            Make sure everyone is comfortable being recorded. Depending on where participants are,
+            their consent may be legally required.
+          </Alert>
+        )
       )}
 
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button
-          variant={active ? 'danger' : 'primary'}
-          loading={busy}
-          onClick={() => {
-            setBusy(true);
-            onConfirm();
-            setBusy(false);
-            onClose();
-          }}
-        >
-          <Radio className="h-4 w-4" />
-          {active ? 'Stop recording' : 'Start recording'}
-        </Button>
+
+        {blocked ? (
+          <Button variant="primary" loading={busy} disabled={!canAllow} onClick={() => void run(onAllow)}>
+            <Radio className="h-4 w-4" />
+            Turn on and record
+          </Button>
+        ) : (
+          <Button variant={active ? 'danger' : 'primary'} loading={busy} onClick={() => void run(onConfirm)}>
+            <Radio className="h-4 w-4" />
+            {active ? 'Stop recording' : 'Start recording'}
+          </Button>
+        )}
       </div>
     </Modal>
   );
@@ -339,7 +394,7 @@ export function AnnounceDialog({ open, onClose }: { open: boolean; onClose: () =
           maxLength={280}
           onChange={(event) => setBody(event.target.value)}
           placeholder="Presentation begins in two minutes."
-          className="w-full resize-none rounded-xl border border-ink-200 bg-white px-3 py-2.5 text-sm focus:outline-2 focus:outline-brand-500 dark:border-white/15 dark:bg-ink-850 dark:text-ink-50"
+          className="w-full resize-none rounded-xl border border-ink-200 bg-white px-3 py-2.5 text-base focus:outline-2 focus:outline-brand-500 sm:text-sm dark:border-white/15 dark:bg-ink-850 dark:text-ink-50"
         />
         <p className="text-right text-xs text-ink-500">{280 - body.length} characters left</p>
 

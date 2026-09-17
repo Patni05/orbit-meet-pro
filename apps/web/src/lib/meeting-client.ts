@@ -37,6 +37,7 @@ import {
 } from '@orbit/shared';
 import { RT_URL } from './api';
 import { capabilities } from './capabilities';
+import { playSound, startConnectingTone, stopConnectingTone } from './sounds';
 import { useRoomStore, type TrackBundle } from './room-store';
 
 /**
@@ -171,6 +172,16 @@ class MeetingClient {
     const store = this.store;
     store.setPhase('connecting');
 
+    /*
+     * A quiet pulse while the SFU connection is negotiated.
+     *
+     * Started here rather than on a timer because this is the exact moment the
+     * user stops being able to tell whether anything is happening, and it is
+     * also a user gesture — joining — which is what lets the audio context
+     * start at all under the browser's autoplay policy.
+     */
+    startConnectingTone();
+
     // The control channel comes up first so roster and chat are ready the
     // moment media connects.
     this.openSocket(ticket.sessionToken);
@@ -201,7 +212,9 @@ class MeetingClient {
 
     this.syncLocalTracks();
     this.startStatsLoop();
+    stopConnectingTone();
     store.setPhase('connected');
+    playSound('join');
   }
 
   // ------------------------------------------------------------------- socket
@@ -232,6 +245,7 @@ class MeetingClient {
       // An auth failure will never succeed on retry; stop and explain.
       if (message === 'UNAUTHORIZED' || message === 'FORBIDDEN') {
         socket.disconnect();
+        stopConnectingTone();
         this.store.setPhase('error', 'This meeting session is no longer valid. Please rejoin.');
       } else if (message === 'MEETING_ENDED') {
         socket.disconnect();
@@ -252,18 +266,21 @@ class MeetingClient {
     });
 
     socket.on('room:error', ({ message }) => {
+      stopConnectingTone();
       this.store.setPhase('error', message);
     });
 
     socket.on('participant:joined', (participant: RoomParticipant) => {
       this.store.upsertParticipant(participant);
       this.store.notify('info', `${participant.name} joined`);
+      playSound('join');
     });
 
     socket.on('participant:left', ({ identity, name, reason }) => {
       this.store.removeParticipant(identity);
       if (reason === 'REMOVED') this.store.notify('warn', `${name} was removed`);
       else this.store.notify('info', `${name} left`);
+      playSound('leave');
     });
 
     socket.on('participant:updated', (patch) => {
@@ -309,10 +326,18 @@ class MeetingClient {
       // outlast the rise animation plus its stagger, or the element is
       // unmounted mid-flight and the reaction vanishes halfway up the screen.
       setTimeout(() => this.store.dropReaction(id), REACTION_LIFETIME_MS);
+
+      // Your own reaction needs no sound; you just sent it.
+      if (identity !== this.store.selfIdentity) playSound('reaction');
     });
 
     socket.on('chat:message', (message) => {
       this.store.addMessage(message);
+
+      // Only for messages from other people, and only when chat is not already
+      // on screen — a tone for something the reader is looking at is noise.
+      const own = message.senderIdentity === this.store.selfIdentity;
+      if (!own && this.store.panel !== 'chat') playSound('message');
     });
 
     socket.on('waiting:updated', ({ waiting }) => {
@@ -344,6 +369,7 @@ class MeetingClient {
     socket.on('meeting:recording', ({ active, startedAt, by }) => {
       this.store.setRecording(active, startedAt);
       this.store.notify(active ? 'warn' : 'info', active ? `${by} started recording` : `${by} stopped recording`);
+      playSound('recording');
     });
 
     socket.on('spotlight:updated', ({ identities, by }) => {
@@ -353,6 +379,7 @@ class MeetingClient {
 
     socket.on('announcement:posted', (announcement) => {
       this.store.setAnnouncement(announcement);
+      playSound('announcement');
     });
 
     socket.on('announcement:cleared', () => {
@@ -379,6 +406,7 @@ class MeetingClient {
 
     socket.on('quiz:starting', ({ quizId, title, questionCount, startsInMs }) => {
       this.store.setQuizStarting({ quizId, title, questionCount, startsAt: Date.now() + startsInMs });
+      playSound('quiz');
     });
 
     socket.on('quiz:started', (view) => {
@@ -404,6 +432,7 @@ class MeetingClient {
     socket.on('poll:opened', (poll) => {
       this.store.upsertPoll(poll);
       this.store.notify('info', 'A poll has opened');
+      playSound('poll');
     });
 
     socket.on('poll:updated', (poll) => {
@@ -534,9 +563,11 @@ class MeetingClient {
 
     room.on(RoomEvent.Reconnecting, () => {
       store().setPhase('reconnecting');
+      startConnectingTone();
     });
 
     room.on(RoomEvent.Reconnected, () => {
+      stopConnectingTone();
       store().setPhase('connected');
       store().notify('success', 'Reconnected');
       this.syncLocalTracks();
@@ -552,10 +583,13 @@ class MeetingClient {
       // already handled through the control channel, so do not also show a
       // generic error.
       if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        stopConnectingTone();
         store().setPhase('error', 'You joined this meeting from another tab or device.');
         return;
       }
       if (reason === DisconnectReason.PARTICIPANT_REMOVED || reason === DisconnectReason.ROOM_DELETED) return;
+
+      stopConnectingTone();
 
       store().setPhase('error', 'The connection to the meeting was lost. You can rejoin.');
     });
@@ -1055,6 +1089,8 @@ class MeetingClient {
   async teardown(options: { notifyServer?: boolean } = {}): Promise<void> {
     this.leaving = true;
     this.stopStatsLoop();
+    // Leaving mid-connect must not leave the pulse ticking on the next screen.
+    stopConnectingTone();
 
     if (options.notifyServer && this.socket?.connected) {
       this.socket.emit('room:leave', {});

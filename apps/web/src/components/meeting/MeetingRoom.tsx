@@ -20,6 +20,7 @@ import { useMeetingTimer } from '@/hooks/useMeetingTimer';
 import { capabilities } from '@/lib/capabilities';
 import { meetingClient } from '@/lib/meeting-client';
 import { selectIsHost, selectIsOwner, useRoomStore } from '@/lib/room-store';
+import { usePictureInPicture } from '@/hooks/usePictureInPicture';
 import { useViewportHeight } from '@/hooks/useViewportHeight';
 import { AnnouncementBanner } from './AnnouncementBanner';
 import { AudioRenderer } from './AudioRenderer';
@@ -82,10 +83,15 @@ export function MeetingRoom({
   const isOwner = useRoomStore(selectIsOwner);
   const hostOnlyExit = useRoomStore((state) => state.hostOnlyExit);
   const locks = useRoomStore((state) => state.locks);
+  const recordingAllowed = useRoomStore((state) => state.meeting?.settings.recordingEnabled ?? false);
 
   // Publishes the keyboard-aware viewport height the shell and the chat
   // composer are laid out against.
   useViewportHeight();
+
+  // Picture-in-picture as tracked state, so the control reflects what is
+  // actually open and can close it again.
+  const pip = usePictureInPicture();
 
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -122,49 +128,6 @@ export function MeetingRoom({
   const toggleHand = useCallback(() => {
     meetingClient.setHandRaised(!handRaised);
   }, [handRaised]);
-
-  /**
-   * Picture-in-picture.
-   *
-   * Puts the current speaker's video into the browser's floating window so the
-   * meeting stays visible while the user works in another tab. Audio is
-   * unaffected: it plays through the page's own audio elements, which keep
-   * running regardless of where the video is rendered.
-   *
-   * Only offered where the browser actually supports it — Firefox and iOS
-   * Safari do not expose this API, and a button that silently fails is worse
-   * than no button.
-   */
-  const enterPictureInPicture = useCallback(async () => {
-    if (!capabilities().pictureInPicture) {
-      notify('warn', 'This browser does not support picture-in-picture.');
-      return;
-    }
-
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-        return;
-      }
-
-      // Pick the largest playing video, which is the speaker or the screen
-      // share rather than a thumbnail in the filmstrip.
-      const candidates = [...document.querySelectorAll('video')].filter(
-        (video) => video.readyState >= 2 && video.videoWidth > 0,
-      );
-      const target = candidates.sort((a, b) => b.videoWidth - a.videoWidth)[0];
-
-      if (!target) {
-        notify('warn', 'Nobody has their camera on yet.');
-        return;
-      }
-
-      await target.requestPictureInPicture();
-    } catch {
-      // A rejection here is usually the user dismissing the prompt.
-      notify('warn', 'Picture-in-picture could not be started.');
-    }
-  }, [notify]);
 
   const sendReaction = useCallback((reaction: ReactionKey) => {
     meetingClient.sendReaction(reaction);
@@ -239,9 +202,9 @@ export function MeetingRoom({
       { id: 'focus', label: 'Toggle focus mode', keywords: 'minimal distraction', run: toggleFocusMode },
       {
         id: 'pip',
-        label: 'Picture-in-picture',
+        label: pip.active ? 'Close picture-in-picture' : 'Picture-in-picture',
         keywords: 'floating window',
-        run: () => void enterPictureInPicture(),
+        run: () => void pip.toggle(),
       },
       {
         id: 'invite',
@@ -303,7 +266,7 @@ export function MeetingRoom({
     toggleScreen,
     toggleHand,
     toggleFocusMode,
-    enterPictureInPicture,
+    pip,
     setPanel,
     notify,
   ]);
@@ -584,7 +547,9 @@ export function MeetingRoom({
         onToggleRecording={() => setRecordingOpen(true)}
         onOpenAnnounce={() => setAnnounceOpen(true)}
         onToggleFocus={toggleFocusMode}
-        onPictureInPicture={enterPictureInPicture}
+        onPictureInPicture={() => void pip.toggle()}
+        pipActive={pip.active}
+        pipBlocked={pip.reason}
       />
 
       {/* Audio is rendered once, outside the grid, and never remounts on layout change. */}
@@ -631,8 +596,17 @@ export function MeetingRoom({
       <RecordingDialog
         open={recordingOpen}
         active={recording.active}
+        allowed={recordingAllowed}
+        canAllow={isOwner}
         onClose={() => setRecordingOpen(false)}
-        onConfirm={() => void meetingClient.setRecording(recording.active ? 'stop' : 'start')}
+        onConfirm={() => meetingClient.setRecording(recording.active ? 'stop' : 'start')}
+        // Enabling and starting are one action from the user's point of view:
+        // they asked to record, and the switch is only in their way.
+        onAllow={async () => {
+          const enabled = await meetingClient.updateSettings({ recordingEnabled: true });
+          if (!enabled.ok) return enabled;
+          return meetingClient.setRecording('start');
+        }}
       />
     </div>
   );

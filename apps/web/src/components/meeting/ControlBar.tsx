@@ -29,11 +29,14 @@ import {
   Users,
   Video,
   VideoOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { capabilities, unavailableReason } from '@/lib/capabilities';
 import { meetingClient } from '@/lib/meeting-client';
+import { setSoundEnabled, soundEnabled } from '@/lib/sounds';
 import {
   selectCameraLockedForMe,
   selectMicLockedForMe,
@@ -53,6 +56,10 @@ export interface ControlBarProps {
   onOpenAnnounce: () => void;
   onToggleFocus: () => void;
   onPictureInPicture: () => void;
+  /** A floating picture-in-picture window is open right now. */
+  pipActive: boolean;
+  /** Why picture-in-picture cannot be used, already written for a user, or null. */
+  pipBlocked: string | null;
 }
 
 /**
@@ -133,6 +140,8 @@ export function ControlBar(props: ControlBarProps) {
           locks={locks}
           onToggleFocus={props.onToggleFocus}
           onPictureInPicture={props.onPictureInPicture}
+          pipActive={props.pipActive}
+          pipBlocked={props.pipBlocked}
         />
       )}
 
@@ -435,6 +444,8 @@ function MoreMenu({
   locks,
   onToggleFocus,
   onPictureInPicture,
+  pipActive,
+  pipBlocked,
 }: {
   onClose: () => void;
   isHost: boolean;
@@ -463,9 +474,16 @@ function MoreMenu({
   locks: { micLocked: boolean; cameraLocked: boolean };
   onToggleFocus: () => void;
   onPictureInPicture: () => void;
+  pipActive: boolean;
+  pipBlocked: string | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const debugAvailable = process.env.NODE_ENV !== 'production';
+
+  // Read on open rather than held in a store: the preference is per device,
+  // lives in localStorage, and nothing else in the app changes it.
+  const [sounds, setSounds] = useState(true);
+  useEffect(() => setSounds(soundEnabled()), []);
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -496,20 +514,30 @@ function MoreMenu({
     >
       {/* These three are on the bar itself at desktop widths. */}
       <div className="sm:hidden">
-        <button
-          type="button"
-          role="menuitem"
-          className={item}
-          onClick={() => {
-            onToggleScreen();
-            onClose();
-          }}
-          disabled={Boolean(shareBlocked)}
-          title={shareBlocked ?? undefined}
-        >
-          <MonitorUp className="h-4 w-4" />
-          {screenSharing ? 'Stop presenting' : 'Present now'}
-        </button>
+        {/* A phone that cannot share a screen gets the reason written out,
+            not a dead row with a `title` no touch device will ever show. */}
+        {shareBlocked ? (
+          <div className={`${item} cursor-default opacity-60 hover:bg-transparent`}>
+            <MonitorUp className="h-4 w-4 shrink-0" />
+            <span className="min-w-0">
+              <span className="block">Present now</span>
+              <span className="block text-[11px] leading-tight text-ink-400">{shareBlocked}</span>
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
+              onToggleScreen();
+              onClose();
+            }}
+          >
+            <MonitorUp className="h-4 w-4" />
+            {screenSharing ? 'Stop presenting' : 'Present now'}
+          </button>
+        )}
 
         <button
           type="button"
@@ -645,24 +673,53 @@ function MoreMenu({
         Focus mode
       </button>
 
+      {/* Deliberately does not close the menu: somebody turning sounds off
+          wants to hear the difference, not hunt for the setting again. */}
       <button
         type="button"
-        role="menuitem"
+        role="menuitemcheckbox"
+        aria-checked={sounds}
         className={item}
-        disabled={!capabilities().pictureInPicture}
-        title={
-          capabilities().pictureInPicture
-            ? undefined
-            : 'This browser does not support picture-in-picture.'
-        }
         onClick={() => {
-          onPictureInPicture();
-          onClose();
+          setSoundEnabled(!sounds);
+          setSounds(!sounds);
         }}
       >
-        <PictureInPicture2 className="h-4 w-4" />
-        Picture-in-picture
+        {sounds ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+        <span className="flex-1 text-left">Sounds</span>
+        <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-ink-300">
+          {sounds ? 'On' : 'Off'}
+        </span>
       </button>
+
+      {/* Hidden outright where the browser cannot do it — Firefox and every
+          browser on iOS — rather than shown as a permanently dead row. When it
+          is supported but there is no video yet, the reason is written under
+          the label instead of hidden in a `title` no touch device shows. */}
+      {!pipBlocked || pipActive ? (
+        <button
+          type="button"
+          role="menuitem"
+          className={item}
+          onClick={() => {
+            onPictureInPicture();
+            onClose();
+          }}
+        >
+          <PictureInPicture2 className="h-4 w-4" />
+          {pipActive ? 'Close picture-in-picture' : 'Picture-in-picture'}
+        </button>
+      ) : (
+        capabilities().pictureInPicture && (
+          <div className={`${item} cursor-default opacity-60 hover:bg-transparent`}>
+            <PictureInPicture2 className="h-4 w-4 shrink-0" />
+            <span className="min-w-0">
+              <span className="block">Picture-in-picture</span>
+              <span className="block text-[11px] leading-tight text-ink-400">{pipBlocked}</span>
+            </span>
+          </div>
+        )
+      )}
 
       <button
         type="button"
@@ -680,19 +737,28 @@ function MoreMenu({
       {isHost && (
         <>
           <div className="my-1.5 h-px bg-white/10" />
+          {/* Not disabled when recording is switched off for the meeting: the
+              dialog explains that and offers the switch. A dead row whose only
+              explanation was a `title` tooltip is invisible on a touch screen,
+              which made this look like a broken button. */}
           <button
             type="button"
             role="menuitem"
             className={item}
-            disabled={!recordingAllowed}
-            title={recordingAllowed ? undefined : 'Recording is turned off for this meeting.'}
             onClick={() => {
               onToggleRecording();
               onClose();
             }}
           >
             <Circle className={`h-4 w-4 ${recordingActive ? 'fill-danger-500 text-danger-500' : ''}`} />
-            {recordingActive ? 'Stop recording' : 'Start recording'}
+            <span className="flex-1 text-left">
+              {recordingActive ? 'Stop recording' : 'Start recording'}
+            </span>
+            {!recordingActive && !recordingAllowed && (
+              <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-ink-400">
+                Off
+              </span>
+            )}
           </button>
           <button
             type="button"

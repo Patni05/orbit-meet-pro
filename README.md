@@ -64,6 +64,7 @@ meeting token already issued.
 | **Polls** | Live polls whose tallies are genuinely withheld on the wire until they close. |
 | **Quizzes** | Graded exams with a server-held clock, ranking, per-question analytics and CSV export. |
 | **Whiteboard** | Shared board synced as strokes, with per-author undo, host permissions and PNG export. |
+| **Sound** | Short synthesised cues for arrivals, chat, announcements, polls and quizzes, plus a quiet pulse while connecting. Off with one tap, remembered per device. |
 | **Personalisation** | 88 built-in avatars, command palette (Ctrl/Cmd+K), focus mode, picture-in-picture. |
 | **Resilience** | Reconnects restore your seat rather than cloning you into the roster. |
 | **Recording** | Optional, via LiveKit Egress. Audio only, never silent — every participant is told — and downloaded through an authorised route rather than a public URL. |
@@ -72,12 +73,12 @@ meeting token already issued.
 
 ## Tests
 
-260 automated checks, all passing, run against both localhost and the live
+266 automated checks, all passing, run against both localhost and the live
 deployment:
 
 ```bash
 npm test                                      # 51 unit tests
-npm run test:e2e                              # 22 browser tests, two real browsers
+npm run test:e2e                              # 28 browser tests, two real browsers
 node apps/api/scripts/test-moderation.mjs     # 36 checks
 node apps/api/scripts/test-quiz.mjs           # 51 checks
 node apps/api/scripts/test-whiteboard.mjs     # 36 checks

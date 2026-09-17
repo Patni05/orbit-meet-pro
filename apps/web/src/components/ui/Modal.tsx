@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useViewportHeight } from '@/hooks/useViewportHeight';
 
 /**
  * Accessible dialog.
@@ -31,6 +32,10 @@ export function Modal({
   size?: 'sm' | 'md' | 'lg';
   closeOnBackdrop?: boolean;
 }) {
+  // Dialogs open on pages that are not the meeting shell, so the modal keeps
+  // the keyboard-aware height published itself rather than assuming.
+  useViewportHeight();
+
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
 
@@ -73,12 +78,29 @@ export function Modal({
     document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', handleKeyDown, true);
 
-    // Move focus into the dialog so keyboard users are not left behind it.
+    /*
+     * Move focus into the dialog, preferring whatever the user came here to
+     * fill in.
+     *
+     * The field selector is separate from, and tried before, the general one
+     * on purpose. It used to be a single list that did not mention `textarea`,
+     * so a dialog whose only field was one — the announcement composer — put
+     * focus on the Cancel button instead. On a desktop that is merely wrong;
+     * on a phone no keyboard opens and the dialog looks like it will not let
+     * you type at all.
+     */
     const timer = window.setTimeout(() => {
-      const target = panelRef.current?.querySelector<HTMLElement>(
-        'input, button:not([data-close]), [tabindex]:not([tabindex="-1"])',
+      const panel = panelRef.current;
+      if (!panel) return;
+
+      const field = panel.querySelector<HTMLElement>(
+        'textarea:not([disabled]), input:not([disabled]):not([type="checkbox"]):not([type="radio"]), select:not([disabled])',
       );
-      (target ?? panelRef.current)?.focus();
+      const fallback = panel.querySelector<HTMLElement>(
+        'button:not([disabled]):not([data-close]), [tabindex]:not([tabindex="-1"])',
+      );
+
+      (field ?? fallback ?? panel).focus();
     }, 20);
 
     return () => {
@@ -94,7 +116,18 @@ export function Modal({
   const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl' } as const;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+    /*
+     * Sized from the visual viewport, not the layout viewport.
+     *
+     * `inset-0` follows the layout viewport, which does not shrink when the
+     * on-screen keyboard opens — so a bottom-sheet dialog with a text field
+     * put that field underneath the keyboard. `--app-height` is published by
+     * useViewportHeight and falls back to `100dvh` where the API is missing.
+     */
+    <div
+      className="fixed inset-x-0 top-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4"
+      style={{ height: 'var(--app-height, 100dvh)' }}
+    >
       <div
         className="absolute inset-0 bg-ink-950/70 backdrop-blur-sm"
         onClick={closeOnBackdrop ? onClose : undefined}
@@ -107,8 +140,8 @@ export function Modal({
         aria-label={title}
         tabIndex={-1}
         className={clsx(
-          'relative w-full animate-[fade-in_0.18s_ease-out] rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl',
-          'max-h-[92vh] overflow-y-auto scrollbar-slim dark:bg-ink-850 dark:text-ink-50',
+          'relative w-full animate-fade-in rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl',
+          'max-h-full overflow-y-auto scrollbar-slim dark:bg-ink-850 dark:text-ink-50',
           widths[size],
         )}
       >

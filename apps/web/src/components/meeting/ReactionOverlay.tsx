@@ -73,6 +73,7 @@ export const ReactionOverlay = memo(function ReactionOverlay() {
   return (
     <div
       ref={layerRef}
+      data-reaction-layer
       className="pointer-events-none absolute inset-0 z-20 overflow-hidden"
       aria-hidden="true"
     >
@@ -84,40 +85,59 @@ export const ReactionOverlay = memo(function ReactionOverlay() {
           for (let i = 0; i < reaction.id.length; i += 1) {
             hash = (hash * 31 + reaction.id.charCodeAt(i)) >>> 0;
           }
-          const lane = 8 + (hash % 78);
+          // 22-78%, not 8-86%. The reaction is a fixed-width chip centred on
+          // its lane, so a lane too close to either edge clips it on a phone —
+          // the wider spread only ever looked right on a desktop.
+          const lane = 22 + (hash % 57);
           const drift = ((hash >> 8) % 40) - 20;
           const delay = (hash >> 16) % 220;
 
           const participant = participants[reaction.identity];
 
           return (
+            /*
+             * Two elements, because they do two different jobs.
+             *
+             * The outer one places the reaction horizontally and centres it on
+             * its lane. The inner one runs the rise. They cannot be the same
+             * element: centring needs `translateX(-50%)` and the animation
+             * owns `transform`, so combining them meant the reaction was
+             * anchored by its left edge instead. A reaction is about 144px
+             * wide, so on a phone the low lanes pinned it against the left
+             * edge and the high ones pushed it off-screen — which is exactly
+             * how it looked.
+             */
             <div
               key={reaction.id}
-              className="animate-reaction-rise absolute bottom-3 flex flex-col items-center gap-1"
-              style={{
-                left: `${lane}%`,
-                animationDelay: `${delay}ms`,
-                // Handed to the keyframes so each reaction curves slightly
-                // differently on its way up, and so the rise ends at the top
-                // of this layer whatever its height happens to be.
-                ['--drift' as string]: `${drift}px`,
-                ['--rise' as string]: `${rise}px`,
-              }}
+              className="absolute bottom-3 -translate-x-1/2"
+              style={{ left: `${lane}%` }}
             >
-              <span className="text-4xl drop-shadow-lg sm:text-5xl">
-                {REACTION_EMOJI[reaction.reaction]}
-              </span>
+              <div
+                className="animate-reaction-rise flex flex-col items-center gap-1"
+                style={{
+                  animationDelay: `${delay}ms`,
+                  // Handed to the keyframes so each reaction curves slightly
+                  // differently on its way up, and so the rise ends at the top
+                  // of this layer whatever its height happens to be.
+                  ['--drift' as string]: `${drift}px`,
+                  ['--rise' as string]: `${rise}px`,
+                }}
+              >
+                <span className="text-4xl drop-shadow-lg sm:text-5xl">
+                  {REACTION_EMOJI[reaction.reaction]}
+                </span>
 
-              <span className="flex max-w-36 items-center gap-1 rounded-full bg-ink-950/70 px-2 py-0.5 backdrop-blur-sm">
-                <Avatar
-                  name={reaction.name}
-                  src={participant?.avatarUrl}
-                  seed={reaction.identity}
-                  size="xs"
-                  ring={false}
-                />
-                <span className="truncate text-[11px] font-medium text-white">{reaction.name}</span>
-              </span>
+                <span className="flex max-w-28 items-center gap-1 rounded-full bg-ink-950/70 px-2 py-0.5 backdrop-blur-sm sm:max-w-36">
+                  <Avatar
+                    name={reaction.name}
+                    src={participant?.avatarUrl}
+                    seed={reaction.identity}
+                    size="xs"
+                    ring={false}
+                  />
+                  <span className="truncate text-[11px] font-medium text-white">{reaction.name}</span>
+                </span>
+              </div>
             </div>
           );
         })}

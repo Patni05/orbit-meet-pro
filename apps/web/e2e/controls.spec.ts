@@ -114,7 +114,7 @@ test.describe('host controls and layout', () => {
      */
     const measured = await reaction.evaluate((element) => {
       const rise = getComputedStyle(element).getPropertyValue('--rise').trim();
-      const layer = element.parentElement!.getBoundingClientRect().height;
+      const layer = element.closest('[data-reaction-layer]')!.getBoundingClientRect().height;
       return { rise: Number.parseFloat(rise), layer };
     });
 

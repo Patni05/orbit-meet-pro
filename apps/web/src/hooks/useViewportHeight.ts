@@ -31,6 +31,16 @@ export interface ViewportState {
  * On a browser without `visualViewport` the variable is simply never set and
  * every consumer falls back to `100dvh`, which is the current behaviour.
  */
+/**
+ * How many components are currently relying on the published variables.
+ *
+ * The meeting shell and any open dialog both want them, and whichever
+ * unmounted first used to delete the properties out from under the other —
+ * collapsing the survivor back to the layout viewport mid-interaction. The
+ * variables are only cleared once the last consumer has gone.
+ */
+let consumers = 0;
+
 export function useViewportHeight(): ViewportState {
   const [state, setState] = useState<ViewportState>({
     height: 0,
@@ -41,6 +51,8 @@ export function useViewportHeight(): ViewportState {
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
+
+    consumers += 1;
 
     let frame = 0;
 
@@ -82,6 +94,10 @@ export function useViewportHeight(): ViewportState {
       viewport.removeEventListener('resize', apply);
       viewport.removeEventListener('scroll', apply);
       window.removeEventListener('orientationchange', apply);
+
+      consumers -= 1;
+      if (consumers > 0) return;
+
       document.documentElement.style.removeProperty('--app-height');
       document.documentElement.style.removeProperty('--keyboard-inset');
     };
