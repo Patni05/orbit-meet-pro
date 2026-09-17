@@ -7,6 +7,18 @@ import { defineConfig, devices } from '@playwright/test';
  * synthetic camera and microphone. That means these tests exercise the genuine
  * WebRTC path — capture, publish through the SFU, subscribe, decode — rather
  * than stubbing media out.
+ *
+ * Run these against a production build (`npm run build -w @orbit/web` then
+ * `npm run start:web`), not `next dev`.
+ *
+ * This is not a preference. Two Chromium instances encoding and decoding real
+ * media, alongside Postgres, Redis and the SFU, already load the machine; the
+ * dev server compiling routes on top of that pushes it over. LiveKit has a
+ * CPU-based admission limiter, and once the host is saturated it refuses new
+ * participants outright with "could not find any available nodes" — which
+ * surfaces as a guest who cannot join, a test that times out waiting for the
+ * control bar, and a suite that fails somewhere different every run. Against a
+ * production build the same suite is roughly three times faster and stable.
  */
 export default defineConfig({
   testDir: './e2e',

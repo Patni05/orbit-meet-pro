@@ -123,15 +123,24 @@ export function PresencePrompt() {
 }
 
 /**
- * Sits above the control bar rather than over it, so the prompt can never
- * cover Mute or Leave — the two controls a person must always be able to reach.
+ * Anchored to the top of the screen, deliberately.
+ *
+ * The obvious place for a prompt is just above the control bar, and that is
+ * where this started — but the reaction picker, the More menu and the emoji
+ * tray all open into exactly that strip, so the prompt sat on top of them and
+ * swallowed the taps. Anything that lingers on screen has to stay out of the
+ * region the controls open into, which leaves the top.
+ *
+ * It is also inset from the right so it clears the focus-mode exit button, and
+ * it never spans the full width on a phone, so the video behind it stays
+ * partly visible while it is up.
  */
 function Sheet({ children, urgent = false }: { children: React.ReactNode; urgent?: boolean }) {
   return (
     <div
       role={urgent ? 'alertdialog' : 'dialog'}
       aria-live={urgent ? 'assertive' : 'polite'}
-      className={`pointer-events-auto fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-sm items-start gap-3 rounded-2xl border p-3.5 shadow-2xl backdrop-blur-xl animate-[fade-in_0.18s_ease-out] sm:bottom-24 ${
+      className={`safe-top pointer-events-auto fixed inset-x-3 top-16 z-40 mx-auto flex max-w-sm items-start gap-3 rounded-2xl border p-3.5 shadow-2xl backdrop-blur-xl animate-[fade-in_0.18s_ease-out] sm:top-20 ${
         urgent ? 'border-warning-500/40 bg-ink-900/95' : 'border-white/10 bg-ink-900/95'
       }`}
     >

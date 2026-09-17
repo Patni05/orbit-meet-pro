@@ -75,6 +75,7 @@ export const VideoTile = memo(function VideoTile({
               twelve-person grid. The caps stop it dominating a wide stage or
               vanishing in a filmstrip thumbnail. */}
           <div
+            data-avatar="tile"
             className={
               compact
                 ? 'aspect-square w-[52%] max-w-24'

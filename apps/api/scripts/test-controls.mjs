@@ -307,6 +307,83 @@ async function main() {
     `status ${hostMissing.status}`,
   );
 
+  // ---- co-host delegation and the exit restriction ----
+  //
+  // A co-host moderates but does not own the room. These two cases are where
+  // that distinction actually bites, and both are decided on the server: the
+  // client only ever reflects them.
+  console.log('\nCo-host limits');
+
+  check(
+    'room state says only the host may end the meeting',
+    guestSocket.roomState?.hostOnlyExit === true,
+    JSON.stringify(guestSocket.roomState?.hostOnlyExit),
+  );
+  check(
+    'co-hosts cannot manage tasks by default',
+    guestSocket.roomState?.cohostsManageTodos === false,
+  );
+
+  const promoted = await emit(hostSocket, 'host:set-role', {
+    identity: guestIdentity,
+    role: 'COHOST',
+  });
+  check('host can promote a co-host', promoted.ok === true, JSON.stringify(promoted));
+
+  // The guest socket is now a co-host; its role is re-read from the database
+  // on every privileged call, so no reconnect is needed.
+  const cohostEnd = await emit(guestSocket, 'host:end-meeting', {});
+  check(
+    'a co-host cannot end the meeting for everyone',
+    cohostEnd.ok === false && cohostEnd.code === 'FORBIDDEN',
+    JSON.stringify(cohostEnd),
+  );
+
+  const cohostTodo = await emit(guestSocket, 'host:todo-create', { text: 'Co-host task' });
+  check(
+    'a co-host cannot manage tasks until allowed',
+    cohostTodo.ok === false && cohostTodo.code === 'FORBIDDEN',
+    JSON.stringify(cohostTodo),
+  );
+
+  const cohostPermission = await emit(guestSocket, 'host:todo-permission', { allow: true });
+  check(
+    'a co-host cannot grant themselves task access',
+    cohostPermission.ok === false && cohostPermission.code === 'FORBIDDEN',
+  );
+
+  const permissionSeen = waitFor(guestSocket, 'todos:permission');
+  const todoPermissionOn = await emit(hostSocket, 'host:todo-permission', { allow: true });
+  check('host can let co-hosts manage tasks', todoPermissionOn.ok === true, JSON.stringify(todoPermissionOn));
+
+  const permissionPayload = await permissionSeen;
+  check(
+    'the permission change reaches the room',
+    permissionPayload?.cohostsManageTodos === true,
+    JSON.stringify(permissionPayload),
+  );
+
+  const cohostTodoAllowed = await emit(guestSocket, 'host:todo-create', { text: 'Co-host task' });
+  check(
+    'a co-host can manage tasks once allowed',
+    cohostTodoAllowed.ok === true,
+    JSON.stringify(cohostTodoAllowed),
+  );
+
+  const revokedSeen = waitFor(guestSocket, 'todos:permission');
+  await emit(hostSocket, 'host:todo-permission', { allow: false });
+  check('revoking the permission is broadcast too', (await revokedSeen)?.cohostsManageTodos === false);
+
+  const cohostTodoAgain = await emit(guestSocket, 'host:todo-create', { text: 'Should fail' });
+  check(
+    'the co-host loses task access again',
+    cohostTodoAgain.ok === false && cohostTodoAgain.code === 'FORBIDDEN',
+  );
+
+  // Ending is still the owner's, and still works for them.
+  const hostEnd = await emit(hostSocket, 'host:end-meeting', {});
+  check('the host can end the meeting', hostEnd.ok === true, JSON.stringify(hostEnd));
+
   for (const socket of [hostSocket, guestSocket]) socket.close();
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

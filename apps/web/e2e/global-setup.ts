@@ -42,4 +42,35 @@ export default async function globalSetup(): Promise<void> {
   } finally {
     redis.disconnect();
   }
+
+  await warmRoutes();
+}
+
+/**
+ * Compiles the routes the suite navigates through, before the clock starts.
+ *
+ * Against `next dev` a route is built the first time it is requested, and a
+ * cold `/dashboard` can take well over twenty seconds. That is a build cost,
+ * not application latency, but it lands inside the first assertion that waits
+ * for a redirect — so the first run after a server restart failed on sign-in
+ * while every later run passed. Requesting the routes up front moves the cost
+ * out of the tests and makes the suite behave the same whether or not the dev
+ * server happens to be warm.
+ */
+async function warmRoutes(): Promise<void> {
+  const base = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+  const routes = ['/login', '/dashboard', '/room/warmup'];
+
+  await Promise.all(
+    routes.map(async (route) => {
+      try {
+        await fetch(`${base}${route}`, { signal: AbortSignal.timeout(120_000) });
+      } catch {
+        // A route that will not warm is the suite's problem to report, not
+        // setup's — the tests give a far better message than this could.
+      }
+    }),
+  );
+
+  console.log('[e2e] warmed routes');
 }
