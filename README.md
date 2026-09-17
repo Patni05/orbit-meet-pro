@@ -9,7 +9,7 @@ between participants and your own server rather than a third party.
 
 ## Live demo
 
-**<https://carmen-flashing-search-contribute.trycloudflare.com>**
+**<https://min-bryant-organisms-speaking.trycloudflare.com>**
 
 A real deployment, served over HTTPS through a Cloudflare Tunnel. You can open
 it on a phone or a laptop and join a meeting with just a name.
@@ -58,26 +58,31 @@ meeting token already issued.
 | **Meetings** | Instant or scheduled, with a waiting room, a lock, and per-meeting policy. |
 | **In-call** | Camera, microphone, screen sharing, chat, reactions, raised hands, grid/speaker layouts. |
 | **Moderation** | Mute, remove, co-host, spotlight, per-meeting blocklist, announcements — all re-authorized server-side. |
+| **Media locks** | Host can lock microphones or cameras for the whole room. A lock persists and the server refuses a locked participant, rather than greying out a button. |
+| **Tasks** | A shared meeting task list everyone can read and only hosts can change, stored in the database so it survives reloads and reconnects. Co-hosts are opted in by the host. |
+| **Presence checks** | Consent-based: a participant agrees first, then answers a prompt themselves. No camera, microphone or sensor is ever read, and an unanswered check simply expires. |
 | **Polls** | Live polls whose tallies are genuinely withheld on the wire until they close. |
 | **Quizzes** | Graded exams with a server-held clock, ranking, per-question analytics and CSV export. |
 | **Whiteboard** | Shared board synced as strokes, with per-author undo, host permissions and PNG export. |
-| **Personalisation** | Built-in avatars, command palette (Ctrl/Cmd+K), focus mode, picture-in-picture. |
+| **Personalisation** | 88 built-in avatars, command palette (Ctrl/Cmd+K), focus mode, picture-in-picture. |
 | **Resilience** | Reconnects restore your seat rather than cloning you into the roster. |
-| **Recording** | Optional, via LiveKit Egress, and never silent — every participant is told. |
+| **Recording** | Optional, via LiveKit Egress. Audio only, never silent — every participant is told — and downloaded through an authorised route rather than a public URL. |
 
 ---
 
 ## Tests
 
-184 automated checks, all passing, run against both localhost and the live
+260 automated checks, all passing, run against both localhost and the live
 deployment:
 
 ```bash
 npm test                                      # 51 unit tests
-npm run test:e2e                              # 10 browser tests, two real browsers
+npm run test:e2e                              # 22 browser tests, two real browsers
 node apps/api/scripts/test-moderation.mjs     # 36 checks
 node apps/api/scripts/test-quiz.mjs           # 51 checks
 node apps/api/scripts/test-whiteboard.mjs     # 36 checks
+node apps/api/scripts/test-controls.mjs       # 57 checks
+node apps/api/scripts/test-recording.mjs      # 7 checks
 ```
 
 The integration suites talk to the realtime API exactly as a browser would,
